@@ -1,2 +1,30 @@
-# requirements.txt
-# This file is currently empty since the project relies only on the Python standard library.
+attr==0.3.2
+cffi==1.15.1
+coincurve==18.0.0
+colorama==0.4.6
+ConfigParser==7.2.0
+docutils==0.21.2
+filelock==3.18.0
+gevent==25.4.2
+gfloat==0.4
+HTMLParser==0.0.2
+ipython==8.14.0
+ipywidgets==8.1.7
+jnius==1.1.0
+keyring==25.6.0
+paramiko==3.5.1
+pexpect==4.8.0
+Pillow==10.0.0
+Pillow==11.2.1
+protobuf==6.30.2
+pyczmq==0.0.4
+pyOpenSSL==25.0.0
+pytest==8.3.5
+python_bcrypt==0.3.2
+redis==6.0.0
+setuptools==65.5.0
+Sphinx==8.2.3
+tornado==6.3.2
+urllib3_secure_extra==0.1.0
+win_inet_pton==1.1.0
+xmlrpclib==1.0.1
