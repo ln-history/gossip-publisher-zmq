@@ -299,7 +299,7 @@ def init(options, configuration, plugin):
     plugin.log(f"Gossip ZMQ Publisher started, publishing to {zmq_endpoint}")
 
 
-@plugin.method("gossip-zmq-status")
+@plugin.method("status")
 def status():
     """Return status information about the gossip ZMQ publisher."""
     return {

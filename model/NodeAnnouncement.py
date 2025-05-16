@@ -9,7 +9,7 @@ class NodeAnnouncement:
     node_id: bytes
     rgb_color: bytes
     alias: bytes
-    addresses: bytes
+    addresses: dict
 
     def __str__(self) -> str:
         return (f"NodeAnnouncement(scid={self.node_id}, timestamp={self.timestamp}, "
@@ -27,6 +27,6 @@ class NodeAnnouncement:
             "alias": decode_alias(self.alias),
             "addresses": [
                 parse_address_descriptor(rec.value)
-                for rec in parse_tlv_stream(self.addresses).values()
+                for rec in self.addresses.values()
             ]
         }
