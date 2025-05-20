@@ -217,6 +217,11 @@ class GossipMonitor:
                 "raw_hex": msg_data.hex(),
                 "parsed": parsed_dict  # parsed can be None if no parser or error
             }
+            
+            self.plugin.log(f"sending payload")
+            self.plugin.log(f"metadata {payload["metadata"]}")
+            self.plugin.log(f"raw_hex {payload["raw_hex"]}")
+            self.plugin.log(f"parsed {payload["parsed"]}")
 
             self.zmq_socket.send_json(payload)
             
