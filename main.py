@@ -13,6 +13,7 @@ import struct
 import threading
 import zmq
 import json
+import time
 
 from dotenv import load_dotenv
 from pathlib import Path
@@ -43,6 +44,8 @@ FLAG_DYING = 0x0800
 # Header format
 HEADER_FORMAT = ">HHII"  # flags(2) + len(2) + crc(4) + timestamp(4)
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+
+SENDER_NODE_ID = os.getenv("SENDER_NODE_ID")
 
 # Helper function
 def load_zmq_endpoint():
@@ -176,6 +179,7 @@ class GossipMonitor:
             "timestamp": timestamp,
             "is_push": bool(flags & FLAG_PUSH),
             "is_dying": bool(flags & FLAG_DYING),
+            "sender_node_id": SENDER_NODE_ID,
             "length": len(msg_data) - 2  # Exclude the type field
         }
         
@@ -240,10 +244,7 @@ class GossipMonitor:
             
             self.plugin.log(f"sending payload", level="info")
             self.plugin.log(f"metadata {payload['metadata']}", level="info")
-            self.plugin.log(f"raw_hex {payload['raw_hex']}", level="info")
             self.plugin.log(f"parsed {payload['parsed']}", level="info")
-
-            self.plugin.log(f"parsed_dict type: {type(parsed_dict)}", level="info")
             
             if not is_json_serializable(payload):
                 self.plugin.log("Payload is not JSON serializable!", level="error")
@@ -300,6 +301,9 @@ class GossipMonitor:
                     if not msg_data:
                         break
                     
+                    if timestamp == 0:
+                        timestamp = int(time.time())
+
                     # Process the message
                     self.process_message(flags, msg_data, timestamp)
                     
