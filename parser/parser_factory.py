@@ -21,7 +21,7 @@ PARSER_MAP: Dict[str, Callable[[bytes], object]] = {
     "gossip_store_private_update": private_channel_update_parser.parse,
     "gossip_store_delete_chan": delete_channel_parser.parse,
     "gossip_store_ended": gossip_store_ended_parser.parse,
-    "gossip_store_chan_dying": channel_dying_parser.parse,
+    "channel_dying": channel_dying_parser.parse
 }
 
 def get_parser(message_type: str) -> Callable[[bytes], object]:

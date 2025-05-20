@@ -210,6 +210,7 @@ class GossipMonitor:
                     parsed_dict = parsed_payload.to_dict()
                 except Exception as parse_error:
                     self.plugin.log(f"Error parsing {msg_info['name']} payload: {parse_error}", level="error")
+                    self.plugin.log(f"Raw message data: {msg_data}", level="error")
 
             payload = {
                 "metadata": msg_info,
