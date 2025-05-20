@@ -8,3 +8,10 @@ class Address:
 
     def __repr__(self):
         return f"<Address type={self.typ} addr={self.addr} port={self.port}>"
+
+    def to_dict(self):
+        return {
+            "type": self.typ.to_dict() if self.typ else None,
+            "addr": self.addr,
+            "port": self.port
+        }
