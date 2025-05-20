@@ -12,6 +12,6 @@ class Address:
     def to_dict(self):
         return {
             "type": self.typ.to_dict() if self.typ else None,
-            "addr": self.addr,
+            "address": self.addr,
             "port": self.port
         }

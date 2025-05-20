@@ -12,6 +12,7 @@ import time
 import struct
 import threading
 import zmq
+import json
 
 from dotenv import load_dotenv
 from pathlib import Path
@@ -52,6 +53,14 @@ def load_zmq_endpoint():
     port = os.getenv("ZMQ_PORT", "5675")
 
     return f"tcp://{host}:{port}"
+
+
+def is_json_serializable(obj):
+    try:
+        json.dumps(obj)
+        return True
+    except Exception:
+        return False
 
 plugin = Plugin()
 
@@ -234,7 +243,18 @@ class GossipMonitor:
             self.plugin.log(f"raw_hex {payload['raw_hex']}", level="debug")
             self.plugin.log(f"parsed {payload['parsed']}", level="debug")
 
-            self.zmq_socket.send_json(payload)
+            self.plugin.log(f"parsed_dict type: {type(parsed_dict)}", level="debug")
+            
+            if not is_json_serializable(payload):
+                self.plugin.log("Payload is not JSON serializable!", level="error")
+                self.plugin.log(f"Payload: {payload}", level="error")
+
+            try:
+                json_str = json.dumps(payload)  # this is where the error will really show
+                self.zmq_socket.send_string(json_str)
+            except TypeError as type_error:
+                self.plugin.log(f"Serialization TypeError: {type_error}", level="error")
+                self.plugin.log(f"Offending payload: {repr(payload)}", level="error")
             
             self.plugin.log(f"Published {msg_info['name']} message", level="debug")
         except Exception as e:
