@@ -224,7 +224,7 @@ class GossipMonitor:
             parsed_dict = None
             parser = get_parser(msg_info["name"])
             if parser:
-                self.plugin.log(f"Using parser {parser}", level="debug")
+                self.plugin.log(f"Using parser {parser}", level="info")
                 try:
                     parsed_payload = parser(msg_data[2:])  # skip 2-byte message type
                     parsed_dict = parsed_payload.to_dict()
@@ -238,25 +238,25 @@ class GossipMonitor:
                 "parsed": parsed_dict  # parsed can be None if no parser or error
             }
             
-            self.plugin.log(f"sending payload", level="debug")
-            self.plugin.log(f"metadata {payload['metadata']}", level="debug")
-            self.plugin.log(f"raw_hex {payload['raw_hex']}", level="debug")
-            self.plugin.log(f"parsed {payload['parsed']}", level="debug")
+            self.plugin.log(f"sending payload", level="info")
+            self.plugin.log(f"metadata {payload['metadata']}", level="info")
+            self.plugin.log(f"raw_hex {payload['raw_hex']}", level="info")
+            self.plugin.log(f"parsed {payload['parsed']}", level="info")
 
-            self.plugin.log(f"parsed_dict type: {type(parsed_dict)}", level="debug")
+            self.plugin.log(f"parsed_dict type: {type(parsed_dict)}", level="info")
             
             if not is_json_serializable(payload):
                 self.plugin.log("Payload is not JSON serializable!", level="error")
                 self.plugin.log(f"Payload: {payload}", level="error")
 
             try:
-                json_str = json.dumps(payload)  # this is where the error will really show
+                json_str = json.dumps(payload)
                 self.zmq_socket.send_string(json_str)
             except TypeError as type_error:
                 self.plugin.log(f"Serialization TypeError: {type_error}", level="error")
                 self.plugin.log(f"Offending payload: {repr(payload)}", level="error")
             
-            self.plugin.log(f"Published {msg_info['name']} message", level="debug")
+            self.plugin.log(f"Published {msg_info['name']} message", level="info")
         except Exception as e:
             self.plugin.log(f"Error publishing message: {e}", level="error")
     
@@ -335,8 +335,10 @@ def init(options, configuration, plugin):
     
     plugin.log(f"Gossip ZMQ Publisher started, publishing to {zmq_endpoint}")
 
+    plugin.log(f"Use `lightning-cli gpz-status`, to get a status update of the plugin.")
 
-@plugin.method("status")
+
+@plugin.method("gpz-status")
 def status():
     """Return status information about the gossip ZMQ publisher."""
     return {
@@ -346,6 +348,5 @@ def status():
     }
 
 
-# Run the plugin
 if __name__ == "__main__":
     plugin.run()
