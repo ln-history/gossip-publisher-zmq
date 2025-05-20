@@ -19,7 +19,7 @@ PARSER_MAP: Dict[str, Callable[[bytes], object]] = {
     "channel_amount": channel_amount_parser.parse,
     "gossip_store_private_channel": private_channel_announcement_parser.parse,
     "gossip_store_private_update": private_channel_update_parser.parse,
-    "gossip_store_delete_chan": delete_channel_parser.parse,
+    "detelte_channel": delete_channel_parser.parse,
     "gossip_store_ended": gossip_store_ended_parser.parse,
     "channel_dying": channel_dying_parser.parse
 }
