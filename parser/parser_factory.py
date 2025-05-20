@@ -4,12 +4,12 @@ from . import channel_announcement_parser
 from . import channel_update_parser
 from . import node_announcement_parser
 
-from . import channel_amount_parser
-from . import private_channel_announcement_parser
-from . import private_channel_update_parser
-from . import delete_channel_parser
-from . import gossip_store_ended_parser
-from . import channel_dying_parser
+from .internal import channel_amount_parser
+from .internal import private_channel_announcement_parser
+from .internal import private_channel_update_parser
+from .internal import delete_channel_parser
+from .internal import gossip_store_ended_parser
+from .internal import channel_dying_parser
 
 # Define a mapping from topic names to parser functions
 PARSER_MAP: Dict[str, Callable[[bytes], object]] = {

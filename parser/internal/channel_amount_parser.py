@@ -1,6 +1,6 @@
 import io
 import struct
-from model.internal.ChannelAmount import ChannelAmount
+from model.internal.ChannelAmount import ChannelAmount 
 
 def parse(data: bytes) -> ChannelAmount:
     b = io.BytesIO(data)

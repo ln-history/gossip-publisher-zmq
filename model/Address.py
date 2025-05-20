@@ -1,8 +1,10 @@
+from model.AddressType import AddressType
+
 class Address:
     def __init__(self):
-        self.typ = None
-        self.addr = None
-        self.port = None
+        self.typ: AddressType = None
+        self.addr: str = None
+        self.port: int = None
 
     def __repr__(self):
-         return f"<Address type={self.typ} addr={self.addr} port={self.port}>"
+        return f"<Address type={self.typ} addr={self.addr} port={self.port}>"
