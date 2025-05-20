@@ -66,7 +66,7 @@ def is_json_serializable(obj):
 plugin = Plugin()
 
 class GossipMonitor:
-    def __init__(self, plugin, zmq_endpoint: str):
+    def __init__(self, plugin, zmq_endpoint: str, sender_node_id: str):
         self.plugin = plugin
         self.zmq_endpoint = zmq_endpoint
         self.zmq_context = zmq.Context()
@@ -76,6 +76,7 @@ class GossipMonitor:
         self.current_offset = 0
         self.file_handle = None
         self.monitor_thread = None
+        self.sender_node_id = sender_node_id
 
     def setup_zmq(self):
         try:
@@ -177,7 +178,7 @@ class GossipMonitor:
             "timestamp": timestamp,
             "is_push": bool(flags & FLAG_PUSH),
             "is_dying": bool(flags & FLAG_DYING),
-            "sender_node_id": SENDER_NODE_ID,
+            "sender_node_id": self.sender_node_id,
             "length": len(msg_data) - 2  # Exclude the type field
         }
         
