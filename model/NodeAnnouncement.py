@@ -45,5 +45,5 @@ class NodeAnnouncement:
             "node_id": self.node_id.hex(),
             "rgb_color": self.rgb_color.hex(),
             "alias": decode_alias(self.alias),
-            "addresses": self._parse_addresses()
+            "addresses": [addr.to_dict() for addr in self._parse_addresses()]
         }
