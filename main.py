@@ -9,13 +9,14 @@ forwards all gossip messages to a ZeroMQ PUB socket.
 
 import os
 import time
-import json
 import struct
 import threading
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
-
 import zmq
+
+from dotenv import load_dotenv
+from pathlib import Path
+from typing import Optional, Tuple
+
 from pyln.client import Plugin
 
 from parser.parser_factory import get_parser
@@ -42,6 +43,16 @@ FLAG_DYING = 0x0800
 HEADER_FORMAT = ">HHII"  # flags(2) + len(2) + crc(4) + timestamp(4)
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
+# Helper function
+def load_zmq_endpoint():
+    # Load .env variables
+    load_dotenv()
+
+    host = os.getenv("ZMQ_HOST", "0.0.0.0")
+    port = os.getenv("ZMQ_PORT", "5675")
+
+    return f"tcp://{host}:{port}"
+
 plugin = Plugin()
 
 class GossipMonitor:
@@ -55,7 +66,7 @@ class GossipMonitor:
         self.current_offset = 0
         self.file_handle = None
         self.monitor_thread = None
-    
+
     def setup_zmq(self):
         try:
             self.zmq_socket.bind(self.zmq_endpoint)
@@ -218,10 +229,10 @@ class GossipMonitor:
                 "parsed": parsed_dict  # parsed can be None if no parser or error
             }
             
-            self.plugin.log(f"sending payload")
-            self.plugin.log(f"metadata {payload['metadata']}")
-            self.plugin.log(f"raw_hex {payload['raw_hex']}")
-            self.plugin.log(f"parsed {payload['parsed']}")
+            self.plugin.log(f"sending payload", level="debug")
+            self.plugin.log(f"metadata {payload['metadata']}", level="debug")
+            self.plugin.log(f"raw_hex {payload['raw_hex']}", level="debug")
+            self.plugin.log(f"parsed {payload['parsed']}", level="debug")
 
             self.zmq_socket.send_json(payload)
             
@@ -295,7 +306,7 @@ def init(options, configuration, plugin):
     plugin.log("Gossip ZMQ Publisher initializing")
     
     # Manually retrieve the ZMQ endpoint from options or use the default
-    zmq_endpoint = options.get("gossip-zmq-endpoint", "tcp://127.0.0.1:5675")
+    zmq_endpoint = options.get("gossip-zmq-endpoint", load_zmq_endpoint())
     
     # Create and start the gossip monitor
     plugin.gossip_monitor = GossipMonitor(plugin, zmq_endpoint)
