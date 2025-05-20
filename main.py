@@ -45,8 +45,6 @@ FLAG_DYING = 0x0800
 HEADER_FORMAT = ">HHII"  # flags(2) + len(2) + crc(4) + timestamp(4)
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
-SENDER_NODE_ID = os.getenv("SENDER_NODE_ID")
-
 # Helper function
 def load_zmq_endpoint():
     # Load .env variables
@@ -331,9 +329,10 @@ def init(options, configuration, plugin):
     
     # Manually retrieve the ZMQ endpoint from options or use the default
     zmq_endpoint = options.get("gossip-zmq-endpoint", load_zmq_endpoint())
-    
+    sender_node_id = os.getenv("SENDER_NODE_ID")
+
     # Create and start the gossip monitor
-    plugin.gossip_monitor = GossipMonitor(plugin, zmq_endpoint)
+    plugin.gossip_monitor = GossipMonitor(plugin, zmq_endpoint, sender_node_id)
     plugin.gossip_monitor.setup_zmq()
     plugin.gossip_monitor.start()
     
