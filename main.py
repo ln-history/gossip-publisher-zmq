@@ -198,9 +198,6 @@ class GossipMonitor:
             msg_info["name"] = "private_update"
         elif msg_type == MSG_TYPE_DELETE_CHAN:
             msg_info["name"] = "delete_channel"
-            if len(msg_data) >= 10:  # 2 bytes type + 8 bytes scid
-                scid = struct.unpack(">Q", msg_data[2:10])[0]
-                msg_info["scid"] = scid
         elif msg_type == MSG_TYPE_PRIVATE_CHANNEL:
             msg_info["name"] = "private_channel"
         elif msg_type == MSG_TYPE_ENDED:
@@ -210,11 +207,6 @@ class GossipMonitor:
                 msg_info["equivalent_offset"] = offset
         elif msg_type == MSG_TYPE_CHAN_DYING:
             msg_info["name"] = "channel_dying"
-            if len(msg_data) >= 14:  # 2 bytes type + 8 bytes scid + 4 bytes blockheight
-                scid = struct.unpack(">Q", msg_data[2:10])[0]
-                blockheight = struct.unpack(">I", msg_data[10:14])[0]
-                msg_info["scid"] = scid
-                msg_info["blockheight"] = blockheight
         else:
             msg_info["name"] = f"unknown_{msg_type}"
         
