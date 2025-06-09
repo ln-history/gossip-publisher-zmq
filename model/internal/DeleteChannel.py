@@ -3,7 +3,7 @@ from dataclasses import dataclass
 @dataclass
 class DeleteChannel:
     """Type 4103: Indicates deletion of a channel."""
-    scid: int  # u64
+    short_channel_id: int  # u64
 
     @property
     def short_channel_id_str(self):

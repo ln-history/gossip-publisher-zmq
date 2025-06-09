@@ -3,7 +3,7 @@ from dataclasses import dataclass
 @dataclass
 class ChannelDying:
     """Type 4106: Indicates a funding tx was spent; scheduled for deletion."""
-    scid: int  # u64
+    short_channel_id: int  # u64
     blockheight: int  # u32
 
     @property
