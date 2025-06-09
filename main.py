@@ -227,7 +227,6 @@ class GossipMonitor:
             parsed_dict = None
             parser = get_parser(msg_info["name"])
             if parser:
-                self.plugin.log(f"Using parser {parser}", level="info")
                 try:
                     parsed_payload = parser(msg_data[2:])  # skip 2-byte message type
                     parsed_dict = parsed_payload.to_dict()
