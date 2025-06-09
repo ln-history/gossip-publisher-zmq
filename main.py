@@ -1,4 +1,4 @@
-#!/Users/fabiankraus/Programming/lightning/custom-plugins/gossip-publisher-zmq/.venv/bin/python
+#!/Users/fabiankraus/Programming/lightning/plugins/gossip-publisher-zmq/.venv/bin/python
 """
 Gossip-Publisher-ZMQ
 A Core Lightning Plugin to publish collected gossip via ZeroMQ
