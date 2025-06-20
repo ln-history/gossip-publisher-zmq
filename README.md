@@ -1,3 +1,10 @@
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Checked with mypy](https://img.shields.io/badge/type%20checked-mypy-blue)](http://mypy-lang.org/)
+![Uses: typing](https://img.shields.io/badge/uses-typing-blue)
+
+[![Commitizen friendly](https://img.shields.io/badge/commitizen-friendly-brightgreen.svg)](http://commitizen.github.io/cz-cli/)
+
 # ⚡ Gossip Publisher ZMQ
 A Core Lightning plugin that **monitors your node's gossip store and broadcasts network events in real-time via ZeroMQ**!
 It is a part of the [ln-history project](https://github.com/ln-history)

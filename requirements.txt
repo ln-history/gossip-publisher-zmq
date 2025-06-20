@@ -1,4 +1,4 @@
 pyln-client
 pyzmq
 python-dotenv
-lnhistoryclient==2.1.4
+lnhistoryclient==3.0.1
