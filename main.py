@@ -363,7 +363,7 @@ def init(options: Dict[str, Any], configuration: Dict[str, Any], plugin: Plugin)
     # Get configuration
     zmq_port: int = plugin.get_option("zmq-port")
     zmq_host: str = plugin.get_option("zmq-host")
-    sender_node_id: Optional[str] = plugin.get_option("sender-node-id") or None
+    sender_node_id: Optional[str] = plugin.get_option("sender-node-id") or resolve_sender_node_id(plugin)
 
     zmq_endpoint = f"tcp://{zmq_host}:{zmq_port}"
 
