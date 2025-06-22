@@ -31,10 +31,19 @@ from lnhistoryclient.constants import (
     LIGHTNING_TYPES,
     MSG_TYPE_GOSSIP_STORE_ENDED,
 )
+from lnhistoryclient.model.ChannelAnnouncement import ChannelAnnouncement
+from lnhistoryclient.model.ChannelUpdate import ChannelUpdate
+from lnhistoryclient.model.core_lightning_internal.ChannelAmount import ChannelAmount
+from lnhistoryclient.model.core_lightning_internal.ChannelDying import ChannelDying
+from lnhistoryclient.model.core_lightning_internal.DeleteChannel import DeleteChannel
+from lnhistoryclient.model.core_lightning_internal.GossipStoreEnded import GossipStoreEnded
+from lnhistoryclient.model.core_lightning_internal.PrivateChannelAnnouncement import PrivateChannelAnnouncement
+from lnhistoryclient.model.core_lightning_internal.PrivateChannelUpdate import PrivateChannelUpdate
 from lnhistoryclient.model.core_lightning_internal.types import ParsedCoreLightningGossipDict, PluginCoreLightningEvent
+from lnhistoryclient.model.NodeAnnouncement import NodeAnnouncement
 from lnhistoryclient.model.types import ParsedGossipDict, PluginEvent, PluginEventMetadata
 from lnhistoryclient.parser import parser_factory
-from lnhistoryclient.parser.common import get_message_type_by_raw_hex
+from lnhistoryclient.parser.common import get_message_type_by_raw_hex, strip_known_message_type
 from pyln.client import Plugin
 
 from config import DEFAULT_POLL_INTERVAL, DEFAULT_SENDER_NODE_ID
@@ -94,7 +103,7 @@ class GossipPublisher:
         except (TypeError, OverflowError):
             return False
 
-    def _parse_message(
+    def _parse_gossip(
         self, msg_type: int, msg_name: str, raw_hex: str
     ) -> Optional[Union[ParsedGossipDict, ParsedCoreLightningGossipDict]]:
         """Parse a message using lnhistoryclient parser."""
@@ -105,7 +114,18 @@ class GossipPublisher:
                 return None
 
             raw_bytes = bytes.fromhex(raw_hex)
-            parsed = parser_fn(raw_bytes)
+            parsed: Union[
+                ChannelAnnouncement,
+                NodeAnnouncement,
+                ChannelUpdate,
+                ChannelAmount,
+                ChannelDying,
+                DeleteChannel,
+                GossipStoreEnded,
+                PrivateChannelAnnouncement,
+                PrivateChannelUpdate,
+            ] = parser_fn(raw_bytes)
+            self.plugin.log(f"Parsed message: {parsed.to_dict()}")
 
             if hasattr(parsed, "to_dict"):
                 return parsed.to_dict()
@@ -234,7 +254,7 @@ class GossipPublisher:
             "length": len(msg_data) - 2,
         }
 
-        parsed = self._parse_message(msg_type, msg_name, raw_hex)
+        parsed = self._parse_gossip(msg_type, msg_name, strip_known_message_type(msg_data).hex())
 
         if msg_type in LIGHTNING_TYPES or msg_type in CORE_LIGHTNING_TYPES:
             payload: Union[PluginEvent, PluginCoreLightningEvent] = {
