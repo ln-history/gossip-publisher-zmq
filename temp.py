@@ -1,5 +1,7 @@
 from typing import Optional
+
 import bech32
+
 
 def decode_ln_dns_name(encoded: bytes) -> Optional[bytes]:
     """Decode a Lightning node Bech32 domain-style string to get the compressed pubkey (33 bytes)."""
