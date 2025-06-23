@@ -1,2 +1,4 @@
-# requirements.txt
-# This file is currently empty since the project relies only on the Python standard library.
+pyln-client
+pyzmq
+python-dotenv
+lnhistoryclient==3.0.1
