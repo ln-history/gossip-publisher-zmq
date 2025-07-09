@@ -46,7 +46,7 @@ from lnhistoryclient.parser import parser_factory
 from lnhistoryclient.parser.common import get_message_type_by_raw_hex, strip_known_message_type
 from pyln.client import Plugin
 
-from config import DEFAULT_POLL_INTERVAL, DEFAULT_SENDER_NODE_ID
+from config import DEFAULT_POLL_INTERVAL, DEFAULT_SENDER_NODE_ID, DEFAULT_ZMQ_HOST, DEFAULT_ZMQ_PORT
 
 # Constants
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
@@ -361,8 +361,8 @@ def init(options: Dict[str, Any], configuration: Dict[str, Any], plugin: Plugin)
     plugin.log("Gossip ZMQ Publisher initializing", level="info")
 
     # Get configuration
-    zmq_port: int = plugin.get_option("zmq-port")
-    zmq_host: str = plugin.get_option("zmq-host")
+    zmq_port: int = plugin.get_option("zmq-port") or DEFAULT_ZMQ_PORT
+    zmq_host: str = plugin.get_option("zmq-host") or DEFAULT_ZMQ_HOST
     sender_node_id: Optional[str] = plugin.get_option("sender-node-id") or resolve_sender_node_id(plugin)
 
     zmq_endpoint = f"tcp://{zmq_host}:{zmq_port}"

@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_ZMQ_HOST = os.getenv("DEFAULT_ZMQ_HOST", "127.0.0.1")
-DEFAULT_ZMQ_PORT = os.getenv("DEFAULT_ZMQ_PORT", "5675")
+DEFAULT_ZMQ_PORT = int(os.getenv("DEFAULT_ZMQ_PORT", "5675"))
 
 DEFAULT_SENDER_NODE_ID = str(os.getenv("DEFAULT_SENDER_NODE_ID"))  # no default value for sender_node_id
 
