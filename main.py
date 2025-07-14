@@ -46,7 +46,7 @@ from lnhistoryclient.parser import parser_factory
 from lnhistoryclient.parser.common import get_message_type_by_raw_hex, strip_known_message_type
 from pyln.client import Plugin
 
-from config import DEFAULT_POLL_INTERVAL, DEFAULT_SENDER_NODE_ID, DEFAULT_ZMQ_HOST, DEFAULT_ZMQ_PORT
+from config import DEFAULT_POLL_INTERVAL, DEFAULT_SENDER_NODE_ID, DEFAULT_ZMQ_HOST, DEFAULT_ZMQ_PORT, OFFSET_FILE_NAME
 
 # Constants
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
@@ -66,6 +66,7 @@ class GossipPublisher:
         self.zmq_socket = self.zmq_context.socket(zmq.PUB)
 
         # File handling
+        self.offset_store_path: Path = Path(OFFSET_FILE_NAME)
         self.gossip_store_path: Optional[Path] = None
         self.current_offset = 0
         self.file_handle: Optional[BinaryIO] = None
@@ -146,6 +147,27 @@ class GossipPublisher:
             self.plugin.log(f"Error binding ZMQ socket: {e}", level="error")
             raise
 
+    def load_offset(self) -> int:
+        """Load the last known offset from a file."""
+        if self.offset_store_path.exists():
+            try:
+                with open(self.offset_store_path, "r") as f:
+                    data = json.load(f)
+                    offset: int = data.get("offset", 1)
+                    self.plugin.log(f"Loaded offset: {offset}", level="info")
+                    return offset
+            except Exception as e:
+                self.plugin.log(f"Failed to read offset file: {e}", level="warn")
+        return 1  # default offset after version byte
+
+    def save_offset(self) -> None:
+        """Persist the current offset to a file."""
+        try:
+            with open(self.offset_store_path, "w") as f:
+                json.dump({"offset": self.current_offset}, f)
+        except Exception as e:
+            self.plugin.log(f"Failed to write offset: {e}", level="error")
+
     def start(self) -> None:
         """Start the monitoring thread."""
         self.running = True
@@ -192,7 +214,20 @@ class GossipPublisher:
                 return False
 
             self.plugin.log(f"Opened gossip_store file, version {major_version}.{minor_version}", level="info")
-            self.current_offset = 1  # Skip the version byte
+
+            # Attempt to resume from stored offset
+            offset = self.load_offset()
+            self.file_handle.seek(offset)
+            self.current_offset = offset
+            self.plugin.log(f"Seeked to offset {offset}", level="info")
+
+            # Test if this offset is valid by attempting to read one header
+            header = self.read_header()
+            if header is None:
+                self.plugin.log(f"Offset {offset} is invalid. Falling back to beginning.", level="warn")
+                self.file_handle.seek(1)
+                self.current_offset = 1
+
             return True
 
         except Exception as e:

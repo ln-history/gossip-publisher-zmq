@@ -10,3 +10,5 @@ DEFAULT_ZMQ_PORT = int(os.getenv("DEFAULT_ZMQ_PORT", "5675"))
 DEFAULT_SENDER_NODE_ID = str(os.getenv("DEFAULT_SENDER_NODE_ID"))  # no default value for sender_node_id
 
 DEFAULT_POLL_INTERVAL = float(os.getenv("DEFAULT_POLL_INTERVAL", 1.0))  # seconds
+
+OFFSET_FILE_NAME = os.getenv("OFFSET_FILE_NAME", "gossip_offset.json")
