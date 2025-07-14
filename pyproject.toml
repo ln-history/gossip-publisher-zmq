@@ -1,6 +1,6 @@
 [project]
 name = "gossip-publisher-zmq"
-version = "0.2.3"
+version = "0.3.0"
 description = "A Core Lightning plugin to send and recieve the content (raw and parsed) of the gossip_store via a Zero-Message-Queue"
 authors = [
     { name = "Fabian Kraus", email = "fabian.felix.kraus@gmail.com" }
