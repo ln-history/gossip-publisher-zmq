@@ -126,7 +126,7 @@ class GossipPublisher:
                 PrivateChannelAnnouncement,
                 PrivateChannelUpdate,
             ] = parser_fn(raw_bytes)
-            self.plugin.log(f"Parsed message: {parsed.to_dict()}")
+            self.plugin.log(f"Parsed message: {parsed.to_dict()} with offset: {self.current_offset}")
 
             if hasattr(parsed, "to_dict"):
                 return parsed.to_dict()
