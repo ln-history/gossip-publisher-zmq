@@ -153,12 +153,12 @@ class GossipPublisher:
             try:
                 with open(self.offset_store_path, "r") as f:
                     data = json.load(f)
-                    offset: int = data.get("offset", 1)
+                    offset = data.get("offset", 0)  # fallback is now 0
                     self.plugin.log(f"Loaded offset: {offset}", level="info")
                     return offset
             except Exception as e:
                 self.plugin.log(f"Failed to read offset file: {e}", level="warn")
-        return 1  # default offset after version byte
+        return 0 
 
     def save_offset(self) -> None:
         """Persist the current offset to a file."""
