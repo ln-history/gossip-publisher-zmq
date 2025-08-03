@@ -17,6 +17,7 @@ This plugin monitors the Core Lightning gossip_store file, parses all gossip mes
 """
 
 import json
+import os
 import struct
 import threading
 import time
@@ -24,7 +25,6 @@ from pathlib import Path
 from typing import Any, BinaryIO, Dict, Optional, Tuple, Union, cast
 
 import zmq
-from zmq import SyncSocket
 from lnhistoryclient.constants import (
     CORE_LIGHTNING_TYPES,
     GOSSIP_TYPE_NAMES,
@@ -44,10 +44,18 @@ from lnhistoryclient.model.core_lightning_internal.types import ParsedCoreLightn
 from lnhistoryclient.model.NodeAnnouncement import NodeAnnouncement
 from lnhistoryclient.model.types import ParsedGossipDict, PluginEvent, PluginEventMetadata
 from lnhistoryclient.parser import parser_factory
-from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known_message_type, varint_decode
+from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known_message_type
 from pyln.client import Plugin
+from zmq import SyncSocket
 
-from config import DEFAULT_POLL_INTERVAL, DEFAULT_SENDER_NODE_ID, DEFAULT_ZMQ_HOST, DEFAULT_ZMQ_PORT, SAVE_INTERVAL, OFFSET_FILE_NAME_WITH_PATH
+from config import (
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_SENDER_NODE_ID,
+    DEFAULT_ZMQ_HOST,
+    DEFAULT_ZMQ_PORT,
+    OFFSET_FILE_NAME_WITH_PATH,
+    SAVE_INTERVAL,
+)
 
 # Constants
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
@@ -56,12 +64,19 @@ HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 class GossipPublisher:
     """Monitors the gossip_store file and publishes messages to ZMQ."""
 
-    def __init__(self, plugin: Plugin, zmq_endpoint: str, sender_node_id: str, save_interval: float, offset_file_name_with_path: str) -> None:
+    def __init__(
+        self,
+        plugin: Plugin,
+        zmq_endpoint: str,
+        sender_node_id: str,
+        save_interval: float,
+        offset_file_name_with_path: Path,
+    ) -> None:
         """Initialize the publisher with plugin instance and configuration."""
         self.plugin = plugin
         self.zmq_endpoint: str = zmq_endpoint
         self.sender_node_id: str = sender_node_id
-        
+
         # Self-correction error management
         self.error_count = 0
         self.max_error_count = 5
@@ -82,7 +97,6 @@ class GossipPublisher:
         self.running = False
         self.monitor_thread: Optional[threading.Thread] = None
         self.initialized = threading.Event()  # Event to signal when initialization is complete
-
 
     def _publish_to_zmq(self, topic: str, payload: Union[ParsedGossipDict, ParsedCoreLightningGossipDict]) -> None:
         """Publish a message to the ZMQ socket."""
@@ -112,7 +126,7 @@ class GossipPublisher:
             return True
         except (TypeError, OverflowError):
             return False
-        
+
     def _is_valid_header(self, flags: int, msg_len: int, timestamp: int) -> bool:
         """Validate if header values seem reasonable."""
         # Basic sanity checks
@@ -129,20 +143,20 @@ class GossipPublisher:
         """Find a valid message boundary to start reading from."""
         if not self.file_handle:
             return False
-            
+
         # Start from beginning (after version byte) and scan forward
         self.file_handle.seek(1)
         self.current_offset = 1
-        
+
         while self.current_offset + HEADER_SIZE < self.file_size:
             if self._validate_current_position():
                 self.plugin.log(f"Found valid starting position at offset {self.current_offset}", level="info")
                 return True
-            
+
             # Move forward and try again
             self.current_offset += 1
             self.file_handle.seek(self.current_offset)
-            
+
         return False
 
     def _validate_current_position(self) -> bool:
@@ -152,7 +166,7 @@ class GossipPublisher:
 
         try:
             file_size = self.gossip_store_path.stat().st_size if self.gossip_store_path else 0
-            
+
             # Check scenario 1: Offset is 1, implying fresh start or error recovery
             if self.current_offset == 1:
                 self.plugin.log("Offset is at start position 1", level="info")
@@ -202,7 +216,7 @@ class GossipPublisher:
                 PrivateChannelAnnouncement,
                 PrivateChannelUpdate,
             ] = parser_fn(raw_bytes)
-            
+
             self.error_count = 0
 
             if hasattr(parsed, "to_dict"):
@@ -216,7 +230,7 @@ class GossipPublisher:
             self.plugin.log(f"Message data in hex: {raw_hex[:1000]}...", level="error")
             self.error_count += 1
             return None
-        
+
     def _resolve_gossip_store_path(self) -> None:
         """Determine the path to the gossip_store file."""
         try:
@@ -236,14 +250,13 @@ class GossipPublisher:
             self.plugin.log(f"Error binding ZMQ socket: {e}", level="error")
             raise
 
-
     def open_gossip_store(self) -> bool:
         """Open the gossip_store file and validate its version."""
         try:
             if not self.gossip_store_path or not self.gossip_store_path.exists():
                 self.plugin.log("Gossip store file does not exist", level="error")
                 return False
-                
+
             self.file_size = self.gossip_store_path.stat().st_size
             self.file_handle = cast(BinaryIO, open(self.gossip_store_path, "rb"))
 
@@ -266,7 +279,7 @@ class GossipPublisher:
             # Attempt to resume from stored offset
             # Load and validate offset
             offset = self.load_offset()
-                
+
             self.file_handle.seek(offset)
             self.current_offset = offset
             self.plugin.log(f"Seeked to offset {offset}", level="info")
@@ -293,7 +306,7 @@ class GossipPublisher:
         if not self.file_handle:
             return None
 
-        try:                
+        try:
             header_data = self.file_handle.read(HEADER_SIZE)
             if len(header_data) == 0:
                 # Current offset is exactly the length of the gossip store and live monitoring has cought up
@@ -305,13 +318,16 @@ class GossipPublisher:
                 return None
 
             flags, msg_len, crc, timestamp = struct.unpack(HEADER_FORMAT, header_data)
-            
+
             # Validate header before updating offset
             if not self._is_valid_header(flags, msg_len, timestamp):
-                self.plugin.log(f"Invalid header at offset {self.current_offset}: flags={flags}, len={msg_len}, ts={timestamp}", level="warn")
+                self.plugin.log(
+                    f"Invalid header at offset {self.current_offset}: flags={flags}, len={msg_len}, ts={timestamp}",
+                    level="warn",
+                )
                 self.error_count += 1
                 return None
-                
+
             self.current_offset += HEADER_SIZE
             self.error_count = 0
             return flags, msg_len, crc, timestamp
@@ -353,7 +369,7 @@ class GossipPublisher:
             "name": msg_name,
             "timestamp": int(time.time()),
             "sender_node_id": self.sender_node_id,
-            "length": len(msg_data) - 2,                # Subtract 2 Bytes message type 
+            "length": len(msg_data) - 2,  # Subtract 2 Bytes message type
         }
 
         parsed = self._parse_gossip(msg_type, msg_name, strip_known_message_type(msg_data).hex())
@@ -402,7 +418,9 @@ class GossipPublisher:
 
             # Initialization is complete here:
             self.initialized.set()
-            self.plugin.log(f"Initialization complete, start monitoring the {self.gossip_store_path} file", level="info")
+            self.plugin.log(
+                f"Initialization complete, start monitoring the {self.gossip_store_path} file", level="info"
+            )
 
             # Start the save-offset-thread now that everything is ready
             self.save_thread = threading.Thread(target=self.save_offset_periodically, daemon=True)
@@ -435,7 +453,6 @@ class GossipPublisher:
                     self.file_handle.close()
                 time.sleep(DEFAULT_POLL_INTERVAL)
 
-
     # === Offset management ===
 
     def load_offset(self) -> int:
@@ -443,32 +460,36 @@ class GossipPublisher:
         if not self.offset_store_path.exists():
             self.plugin.log("No offset file found, starting from beginning", level="info")
             return 1
-            
+
         try:
             with open(self.offset_store_path, "r") as f:
                 data = json.load(f)
-                offset = data.get("offset", 1)
-                
+                offset = int(data.get("offset", 1))
+
                 # Validate offset against current file size
                 if self.gossip_store_path and self.gossip_store_path.exists():
                     file_size = self.gossip_store_path.stat().st_size
                     if offset > file_size:
-                        self.plugin.log(f"Stored offset {offset} > file size {file_size}, resetting to beginning", level="warn")
+                        self.plugin.log(
+                            f"Stored offset {offset} > file size {file_size}, resetting to beginning", level="warn"
+                        )
                         return 1
                     elif offset < 1:
                         self.plugin.log(f"Invalid stored offset {offset}, resetting to beginning", level="warn")
                         return 1
-                
+
                 self.plugin.log(f"Loaded offset: {offset}", level="info")
                 return offset
-                
+
         except Exception as e:
             self.plugin.log(f"Failed to read offset file: {e}", level="error")
             return 1
 
     def save_offset(self) -> None:
         """Persist the current offset to the configured path."""
-        self.plugin.log(f"Trying to save current offset {self.current_offset} to file {self.offset_store_path}.", level="info")
+        self.plugin.log(
+            f"Trying to save current offset {self.current_offset} to file {self.offset_store_path}.", level="info"
+        )
         try:
             with open(self.offset_store_path, "w") as f:
                 json.dump({"offset": self.current_offset}, f)
@@ -476,22 +497,38 @@ class GossipPublisher:
         except Exception as e:
             self.plugin.log(f"Failed to save offset to {self.offset_store_path}: {e}", level="error")
 
-    def save_offset_periodically(self):
+    def save_offset_periodically(self) -> None:
         """Periodically save the offset to a file."""
         self.initialized.wait()  # Wait until initialization is complete
         while self.running:
             self.save_offset()
             time.sleep(self.save_interval)
 
-    def error_watchdog(self):
-        """Checks the error count and stops the plugin if threshold is reached."""
+    def error_watchdog(self) -> None:
+        """Monitors error count and auto-recovers by jumping to end of file."""
         while self.running:
             if self.error_count >= self.max_error_count:
-                self.plugin.log(f"Got {self.error_count} consecutive errors. The offset is likely off. Initiating stopping of plugin.", level="error")
-                self.stop()
-                break
-            time.sleep(1)
+                self.plugin.log(
+                    f"Got {self.error_count} consecutive errors. The current offset {self.current_offset} is likely off. "
+                    f"Jumping to end of file for recovery.",
+                    level="error",
+                )
 
+                # Jump to end of file
+                try:
+                    new_offset = os.path.getsize(self.gossip_store_path)
+                    self.current_offset = new_offset
+                    self.plugin.log(
+                        f"Set current_offset from {self.current_offset} to the end of file {self.gossip_store_path}: {new_offset}",
+                        level="info",
+                    )
+                except Exception as e:
+                    self.plugin.log(f"Failed to get file size for {self.gossip_store_path}: {e}", level="error")
+                    self.stop()
+
+                # Reset error counter and continue
+                self.error_count = 0
+            time.sleep(DEFAULT_POLL_INTERVAL)
 
     # === Start of plugin ===
 
@@ -508,7 +545,6 @@ class GossipPublisher:
         self.error_watchdog_thread = threading.Thread(target=self.error_watchdog, daemon=True)
         self.error_watchdog_thread.start()
 
-        
     # === Stop of plugin ===
 
     def stop(self) -> None:
@@ -518,11 +554,11 @@ class GossipPublisher:
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=2.0)
             self.plugin.log("Monitor thread stopped", level="info")
-        
+
         if self.save_thread and self.save_thread.is_alive():
             self.save_thread.join(timeout=2.0)
             self.plugin.log("Save thread stopped", level="info")
-        
+
         # Close file
         if self.file_handle:
             self.file_handle.close()
@@ -552,6 +588,7 @@ def resolve_sender_node_id(plugin: Plugin) -> Optional[str]:
 
     return fallback_node_id or None
 
+
 # Initialize plugin
 plugin = Plugin()
 
@@ -559,7 +596,10 @@ plugin.add_option("zmq-port", "5675", "Port to bind ZMQ PUB socket")
 plugin.add_option("zmq-host", "127.0.0.1", "Host to bind ZMQ PUB socket")
 plugin.add_option("sender-node-id", "", "Optional override for sender_node_id")
 plugin.add_option("save-interval", "60", "Interval in seconds to save the offset regularly")
-plugin.add_option("offset-file-name-with-path", "gossip_offset.json", "File to save the current offset in the gossip_store file")
+plugin.add_option(
+    "offset-file-name-with-path", "gossip_offset.json", "File to save the current offset in the gossip_store file"
+)
+
 
 @plugin.init()
 def init(options: Dict[str, Any], configuration: Dict[str, Any], plugin: Plugin) -> None:
@@ -574,16 +614,23 @@ def init(options: Dict[str, Any], configuration: Dict[str, Any], plugin: Plugin)
     zmq_endpoint = f"tcp://{zmq_host}:{zmq_port}"
 
     save_interval: float = float(plugin.get_option("save-interval")) or SAVE_INTERVAL
-    offset_file_name_with_path: Path = Path(plugin.get_option("offset-file-name-with-path")) or OFFSET_FILE_NAME_WITH_PATH
+    offset_file_name_with_path: Path = (
+        Path(plugin.get_option("offset-file-name-with-path")) or OFFSET_FILE_NAME_WITH_PATH
+    )
 
     # Create and start the gossip publisher
-    plugin.gossip_monitor = GossipPublisher(plugin, zmq_endpoint, sender_node_id, save_interval, offset_file_name_with_path)
+    plugin.gossip_monitor = GossipPublisher(
+        plugin, zmq_endpoint, sender_node_id, save_interval, offset_file_name_with_path
+    )
     plugin.gossip_monitor.setup_zmq()
     plugin.gossip_monitor.start()
 
     plugin.log(f"Gossip ZMQ Publisher started, publishing to {zmq_endpoint}", level="info")
     plugin.log("Use `lightning-cli gpz-status` to get a status update of the plugin.", level="info")
-    plugin.log("Use `lightning-cli -k plugin subcommand=start plugin=<path-to-plugin> <option-name>=<value>` to configure the plugin.", level="info")
+    plugin.log(
+        "Use `lightning-cli -k plugin subcommand=start plugin=<path-to-plugin> <option-name>=<value>` to configure the plugin.",
+        level="info",
+    )
 
 
 @plugin.method("gpz-status", desc="Returns the live status of the plugin")
