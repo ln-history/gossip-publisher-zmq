@@ -11,4 +11,6 @@ DEFAULT_SENDER_NODE_ID = str(os.getenv("DEFAULT_SENDER_NODE_ID"))  # no default 
 
 DEFAULT_POLL_INTERVAL = float(os.getenv("DEFAULT_POLL_INTERVAL", 1.0))  # seconds
 
-OFFSET_FILE_NAME = os.getenv("OFFSET_FILE_NAME", "gossip_offset.json")
+OFFSET_FILE_NAME_WITH_PATH = os.getenv("OFFSET_FILE_NAME_WITH_PATH", "gossip_offset.json")
+
+SAVE_INTERVAL = float(os.getenv("SAVE_INTERVAL", 60))
