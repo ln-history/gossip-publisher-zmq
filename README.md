@@ -43,11 +43,19 @@ pip install -r requirements.txt
 
 ## 🎮 Usage
 Configure the plugin.
-Create a .env file with your ZeroMQ settings:
+Create a .env file (feel free to copy the .example.env file) with your configuration settings:
 ```sh
-ZMQ_HOST=0.0.0.0
+ZMQ_HOST=127.0.0.1
 ZMQ_PORT=5675
-SENDER_NODE_ID=<your_node_pubkey_here>
+
+DEFAULT_POLL_INTERVAL=1
+DEFAULT_SENDER_NODE_ID=my-gossip-publisher      # Set a name or id for your node that gets attached to every published message
+
+DEFAULT_LOG_DIR=logs
+
+OFFSET_FILE_NAME_WITH_PATH=gossip_offset.json
+
+SAVE_INTERVAL=60
 ```
 
 #### Start the plugin with Core Lightning
@@ -58,13 +66,17 @@ echo "plugin=/path/to/gossip-publisher-zmq/main.py" >> ~/.lightning/config
 ```
 
 Or start it directly with lightningd
-```bash
+```sh
 lightningd --plugin=/path/to/gossip-publisher-zmq/main.py
 ```
 
-Check plugin status
-
+In case you want to configure the env variables, you can also pass them as <key>=<value>, using this syntax:
+```sh
+lightning-cli -k plugin subcommand=start plugin=/path/to/plugin/gossip-publisher-zmq/main.py zmq-port=5676
 ```
+
+Check plugin status
+```sh
 lightning-cli gpz-status
 ```
 
@@ -80,7 +92,7 @@ Each message published by the plugin follows a JSON structure. For example a `ch
         "sender_node_id": "03a...b2c",
         "length": 414
     },
-    "raw_hex": "0102...", #raw_hex
+    "raw_hex": "0102...",
     "parsed": {
         "channel_id": "631...ab9",
         "node1_id": "02d...f4c",
@@ -93,10 +105,16 @@ Each message published by the plugin follows a JSON structure. For example a `ch
 }
 ```
 
+The library [lnhistoryclient](https://pypi.org/project/lnhistoryclient/) provides python classes, types, functions and much more for the gossip messages.
+
+## 💥 Error behaviour
+
+This plugin runs a "watchdog thread" which stops the program automatically as soon as 5 errors appeared consecutively. 
+
 ## 🧙‍♂️ Subscribing to messages
 You can subscribe to gossip messages in any language with ZeroMQ support:
 
-This repository provides a simple python [example](./subscriber.py)
+This repository provides a simple python [example](./subscriber.py), to see the results of this plugin.
 
 ```python
 import zmq
@@ -130,6 +148,7 @@ The plugin handles all types of Lightning Network gossip messages:
 🔒 private_channel - Private channel information (Core Lightning specific)
 🏁 store_ended - Gossip store end markers (Core Lightning specific)
 💀 channel_dying - Channels about to be removed (Core Lightning specific)
+
 
 ## 🧪 Development
 
