@@ -30,26 +30,32 @@ This plugin acts as a bridge between your Core Lightning node and any applicatio
 
 ### Install the plugin
 
-Clone the repository
+### Clone the repository
 ```sh
 git clone https://github.com/ln-history/gossip-publisher-zmq.git
 cd gossip-publisher-zmq
 ```
 
-Install dependencies
+### Install dependencies
 ```sh
 pip install -r requirements.txt
 ```
 
+### Correcting the shebang
+On top of the [main.py](main.py) file there is a line starting with `#!`.
+This should be an absolute path pointing to the virual environment just created.
+
+Put in this as the first line: `#!/home/<your-user>/path/to/plugin/gossip-publisher-zmq/.venv/bin/python`
+
 ## 🎮 Usage
-Configure the plugin.
+### Configure the plugin
 Create a .env file (feel free to copy the .example.env file) with your configuration settings:
 ```sh
 ZMQ_HOST=127.0.0.1
 ZMQ_PORT=5675
 
 DEFAULT_POLL_INTERVAL=1
-DEFAULT_SENDER_NODE_ID=my-gossip-publisher      # Set a name or id for your node that gets attached to every published message
+DEFAULT_SENDER_NODE_ID=my-gossip-publisher-zmq      # Set a name or id for your node that gets attached to every published message
 
 DEFAULT_LOG_DIR=logs
 
