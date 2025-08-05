@@ -58,10 +58,6 @@ DEFAULT_POLL_INTERVAL=1
 DEFAULT_SENDER_NODE_ID=my-gossip-publisher-zmq      # Set a name or id for your node that gets attached to every published message
 
 DEFAULT_LOG_DIR=logs
-
-OFFSET_FILE_NAME_WITH_PATH=gossip_offset.json
-
-SAVE_INTERVAL=60
 ```
 
 #### Start the plugin with Core Lightning
@@ -113,9 +109,6 @@ Each message published by the plugin follows a JSON structure. For example a `ch
 
 The library [lnhistoryclient](https://pypi.org/project/lnhistoryclient/) provides python classes, types, functions and much more for the gossip messages.
 
-## 💥 Error behaviour
-
-This plugin runs a "watchdog thread" which stops the program automatically as soon as 5 errors appeared consecutively. 
 
 ## 🧙‍♂️ Subscribing to messages
 You can subscribe to gossip messages in any language with ZeroMQ support:
