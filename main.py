@@ -189,7 +189,7 @@ class GossipPublisher:
                 return False
 
             self.plugin.log(f"Opened gossip_store file, version {major_version}.{minor_version}", level="info")
-            
+
             # Set offset to 1 (after version byte) and position file handle there
             self.current_offset = 1
             self.file_handle.seek(self.current_offset)
@@ -219,7 +219,7 @@ class GossipPublisher:
                 return None
 
             flags, msg_len, crc, timestamp = struct.unpack(HEADER_FORMAT, header_data)
-            
+
             # Update offset after successful header read
             self.current_offset += HEADER_SIZE
             return flags, msg_len, crc, timestamp
@@ -356,7 +356,7 @@ class GossipPublisher:
         # Start monitor thread
         self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
         self.monitor_thread.start()
-        self.plugin.log(f"GossipPublisher monitoring thread started", level="info")
+        self.plugin.log("GossipPublisher monitoring thread started", level="info")
 
     # === Stop of plugin ===
 
