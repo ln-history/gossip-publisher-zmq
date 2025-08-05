@@ -22,6 +22,7 @@ import struct
 import threading
 import time
 from pathlib import Path
+from threading import Thread
 from typing import Any, BinaryIO, Dict, Optional, Tuple, Union, cast
 
 import zmq
@@ -44,7 +45,7 @@ from lnhistoryclient.model.core_lightning_internal.types import ParsedCoreLightn
 from lnhistoryclient.model.NodeAnnouncement import NodeAnnouncement
 from lnhistoryclient.model.types import ParsedGossipDict, PluginEvent, PluginEventMetadata
 from lnhistoryclient.parser import parser_factory
-from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known_message_type
+from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known_message_type, varint_encode
 from pyln.client import Plugin
 from zmq import SyncSocket
 
@@ -73,14 +74,14 @@ class GossipPublisher:
         offset_file_name_with_path: Path,
     ) -> None:
         """Initialize the publisher with plugin instance and configuration."""
-        self.plugin = plugin
+        self.plugin: Plugin = plugin
         self.zmq_endpoint: str = zmq_endpoint
         self.sender_node_id: str = sender_node_id
 
         # Self-correction error management
-        self.error_count = 0
-        self.max_error_count = 5
-        self.error_watchdog_thread = None
+        self.error_count: int = 0
+        self.max_error_count: int = 5
+        self.error_watchdog_thread: Optional[Thread] = None
 
         # ZeroMQ setup
         self.zmq_context = zmq.Context()
@@ -94,8 +95,8 @@ class GossipPublisher:
         self.save_interval: float = save_interval
 
         # Monitoring
-        self.running = False
-        self.monitor_thread: Optional[threading.Thread] = None
+        self.running: bool = False
+        self.monitor_thread: Optional[Thread] = None
         self.initialized = threading.Event()  # Event to signal when initialization is complete
 
     def _publish_to_zmq(self, topic: str, payload: Union[ParsedGossipDict, ParsedCoreLightningGossipDict]) -> None:
@@ -126,18 +127,6 @@ class GossipPublisher:
             return True
         except (TypeError, OverflowError):
             return False
-
-    def _is_valid_header(self, flags: int, msg_len: int, timestamp: int) -> bool:
-        """Validate if header values seem reasonable."""
-        # Basic sanity checks
-        if msg_len < 0 or msg_len > 65535:  # Max reasonable message size
-            return False
-        if timestamp < 0 or timestamp > 2**32:  # Reasonable timestamp range
-            return False
-        # Flags should be reasonable (check specific flag bits if known)
-        if flags < 0 or flags > 255:
-            return False
-        return True
 
     def _find_valid_starting_position(self) -> bool:
         """Find a valid message boundary to start reading from."""
@@ -319,15 +308,6 @@ class GossipPublisher:
 
             flags, msg_len, crc, timestamp = struct.unpack(HEADER_FORMAT, header_data)
 
-            # Validate header before updating offset
-            if not self._is_valid_header(flags, msg_len, timestamp):
-                self.plugin.log(
-                    f"Invalid header at offset {self.current_offset}: flags={flags}, len={msg_len}, ts={timestamp}",
-                    level="warn",
-                )
-                self.error_count += 1
-                return None
-
             self.current_offset += HEADER_SIZE
             self.error_count = 0
             return flags, msg_len, crc, timestamp
@@ -355,14 +335,18 @@ class GossipPublisher:
             self.plugin.log(f"Error reading message: {e}", level="error")
             return None
 
-    def process_message(self, msg_data: bytes, timestamp: int) -> bool:
+    def process_message(self, msg_data: bytes) -> bool:
         """Process and publish a gossip message. Return False if processing should stop."""
         if not msg_data or len(msg_data) < 2:
             return True
 
+        # Adding the length of the raw gossip as varint decode to the raw_hex
+        msg_len = len(msg_data)
+        msg_len_varint_encoded = varint_encode(msg_len)
+
         msg_type = get_message_type_by_bytes(msg_data)
         msg_name = GOSSIP_TYPE_NAMES.get(msg_type, f"UNKNOWN_{msg_type}")
-        raw_hex = msg_data.hex()
+        raw_hex = (msg_len_varint_encoded + msg_data).hex()
 
         metadata: PluginEventMetadata = {
             "type": msg_type,
@@ -444,7 +428,7 @@ class GossipPublisher:
                     time.sleep(DEFAULT_POLL_INTERVAL)
                     continue
 
-                if not self.process_message(msg_data, timestamp):
+                if not self.process_message(msg_data):
                     break
 
             except Exception as e:
@@ -516,7 +500,7 @@ class GossipPublisher:
 
                 # Jump to end of file
                 try:
-                    new_offset = os.path.getsize(self.gossip_store_path)
+                    new_offset = os.path.getsize(str(self.gossip_store_path))
                     self.current_offset = new_offset
                     self.plugin.log(
                         f"Set current_offset from {self.current_offset} to the end of file {self.gossip_store_path}: {new_offset}",
@@ -614,8 +598,8 @@ def init(options: Dict[str, Any], configuration: Dict[str, Any], plugin: Plugin)
     zmq_endpoint = f"tcp://{zmq_host}:{zmq_port}"
 
     save_interval: float = float(plugin.get_option("save-interval")) or SAVE_INTERVAL
-    offset_file_name_with_path: Path = (
-        Path(plugin.get_option("offset-file-name-with-path")) or OFFSET_FILE_NAME_WITH_PATH
+    offset_file_name_with_path: Path = Path(plugin.get_option("offset-file-name-with-path")) or Path(
+        OFFSET_FILE_NAME_WITH_PATH
     )
 
     # Create and start the gossip publisher
