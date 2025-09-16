@@ -16,6 +16,7 @@ This plugin monitors the Core Lightning gossip_store file, parses all gossip mes
 }
 """
 
+import errno
 import json
 import struct
 import threading
@@ -25,6 +26,7 @@ from threading import Thread
 from typing import Any, BinaryIO, Dict, Optional, Tuple, Union, cast
 
 import zmq
+from crc32c import crc32c
 from lnhistoryclient.constants import (
     CORE_LIGHTNING_TYPES,
     GOSSIP_TYPE_NAMES,
@@ -48,12 +50,7 @@ from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known
 from pyln.client import Plugin
 from zmq import SyncSocket
 
-from config import (
-    DEFAULT_POLL_INTERVAL,
-    DEFAULT_SENDER_NODE_ID,
-    DEFAULT_ZMQ_HOST,
-    DEFAULT_ZMQ_PORT,
-)
+from config import DEFAULT_SENDER_NODE_ID, DEFAULT_ZMQ_HOST, DEFAULT_ZMQ_PORT, POLL_INTERVAL, START_AT_BYTE
 
 # Constants
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
@@ -71,16 +68,31 @@ class GossipPublisher:
         # ZeroMQ setup
         self.zmq_context = zmq.Context()
         self.zmq_socket: SyncSocket = self.zmq_context.socket(zmq.PUB)
+        self.zmq_socket.setsockopt(zmq.LINGER, 1000)
 
         # File handling
         self.gossip_store_path: Optional[Path] = None
-        self.current_offset: int = 1  # Always start after the version byte
         self.file_handle: Optional[BinaryIO] = None
 
         # Monitoring
         self.running: bool = False
         self.monitor_thread: Optional[Thread] = None
         self.initialized = threading.Event()  # Event to signal when initialization is complete
+
+    def setup_zmq(self) -> None:
+        """Bind the ZMQ socket to the specified endpoint."""
+        try:
+            self.zmq_socket.bind(self.zmq_endpoint)
+            self.plugin.log(f"ZMQ publisher bound to {self.zmq_endpoint}", level="info")
+        except zmq.error.ZMQError as e:
+            if e.errno == errno.EADDRINUSE:
+                self.plugin.log(
+                    f"ZMQ address already in use: {self.zmq_endpoint}. " "Is another instance running?", level="error"
+                )
+            else:
+                self.plugin.log(f"Error binding ZMQ socket: {e}", level="error")
+
+            self.running = False
 
     def _publish_to_zmq(self, topic: str, payload: Union[ParsedGossipDict, ParsedCoreLightningGossipDict]) -> None:
         """Publish a message to the ZMQ socket."""
@@ -97,8 +109,6 @@ class GossipPublisher:
             # Second frame: JSON payload
             json_str = json.dumps(payload)
             self.zmq_socket.send_string(json_str)
-
-            self.plugin.log(f"Published {topic} message", level="info")
 
         except Exception as e:
             self.plugin.log(f"Error publishing message: {e}", level="error")
@@ -135,7 +145,6 @@ class GossipPublisher:
             ] = parser_fn(raw_bytes)
 
             if hasattr(parsed, "to_dict"):
-                self.plugin.log(f"Parsed message: {parsed.to_dict()} with offset: {self.current_offset}", level="info")
                 return parsed.to_dict()
             else:
                 return vars(parsed)
@@ -155,32 +164,27 @@ class GossipPublisher:
         except Exception as e:
             self.plugin.log(f"Failed to resolve gossip store path: {e}", level="error")
 
-    def setup_zmq(self) -> None:
-        """Bind the ZMQ socket to the specified endpoint."""
-        try:
-            self.zmq_socket.bind(self.zmq_endpoint)
-            self.plugin.log(f"ZMQ publisher bound to {self.zmq_endpoint}", level="info")
-        except zmq.error.ZMQError as e:
-            self.plugin.log(f"Error binding ZMQ socket: {e}", level="error")
-            raise
-
-    def open_gossip_store(self) -> bool:
-        """Open the gossip_store file and validate its version."""
+    def _open_gossip_store(self) -> bool:
+        """Open the gossip_store file, validate its version and check if any gossip messages exist."""
         try:
             if not self.gossip_store_path or not self.gossip_store_path.exists():
                 self.plugin.log("Gossip store file does not exist", level="error")
                 return False
 
             self.file_size = self.gossip_store_path.stat().st_size
-            self.file_handle = cast(BinaryIO, open(self.gossip_store_path, "rb"))
-
-            # Read and verify version
-            version_byte = self.file_handle.read(1)
-            if not version_byte:
-                self.plugin.log("Empty gossip_store file", level="warn")
+            if self.file_size < 1:
+                self.plugin.log(f"Empty gossip_store file at {self.gossip_store_path}", level="error")
                 return False
 
-            version = int(version_byte[0])
+            self.file_handle = cast(BinaryIO, open(self.gossip_store_path, "rb"))
+
+            # Read version byte
+            version_byte = self.file_handle.read(1)
+            if not version_byte:
+                self.plugin.log("Failed to read gossip_store version byte", level="error")
+                return False
+
+            version = version_byte[0]
             major_version = (version >> 5) & 0x07
             minor_version = version & 0x1F
 
@@ -188,13 +192,14 @@ class GossipPublisher:
                 self.plugin.log(f"Unsupported gossip_store major version: {major_version}", level="error")
                 return False
 
-            self.plugin.log(f"Opened gossip_store file, version {major_version}.{minor_version}", level="info")
+            self.plugin.log(
+                f"Opened gossip_store file, version {major_version}.{minor_version}",
+                level="info",
+            )
 
-            # Set offset to 1 (after version byte) and position file handle there
-            self.current_offset = 1
-            self.file_handle.seek(self.current_offset)
-            self.plugin.log(f"Starting from offset {self.current_offset}", level="info")
-
+            # Seek to offset 1 (after version byte) to position file handle there
+            self.file_handle.seek(1)
+            self.plugin.log(f"Positioned file_handle at offset {self.file_handle.tell()}", level="info")
             return True
 
         except Exception as e:
@@ -206,13 +211,17 @@ class GossipPublisher:
 
     # === Management of message reading  ===
 
-    def read_header(self) -> Optional[Tuple[int, int, int, int]]:
+    def _read_header(self) -> Optional[Tuple[int, int, int, int]]:
         """Read and parse gossip_store header with enhanced validation."""
+
         if not self.file_handle:
+            self.plugin.log("Could not read header, due to missing file_handle", level="error")
+            self.running = False
             return None
 
         try:
-            # Read header data
+            start = self.file_handle.tell()
+
             header_data = self.file_handle.read(HEADER_SIZE)
             if len(header_data) < HEADER_SIZE:
                 # EOF or incomplete header
@@ -220,33 +229,59 @@ class GossipPublisher:
 
             flags, msg_len, crc, timestamp = struct.unpack(HEADER_FORMAT, header_data)
 
-            # Update offset after successful header read
-            self.current_offset += HEADER_SIZE
+            # Verify if the read values are correct via CRC32C, see: https://docs.corelightning.org/docs/contribute-to-core-lightning#the-record-header
+            payload: bytes = self.file_handle.read(msg_len)
+
+            if len(payload) < msg_len:
+                self.plugin.log(
+                    f"Likely incomplete message (EOF): During length check of payload with length = {len(payload)} but needs to be {msg_len}",
+                    level="warn",
+                )
+                self.file_handle.seek(start)
+                return None
+
+            computed_crc = crc32c(payload, timestamp) & 0xFFFFFFFF
+            if computed_crc != crc:
+                self.plugin.log(
+                    f"CRC32C mismatch at offset {self.file_handle.tell()}, started from {start}: expected {crc}, got {computed_crc}",
+                    level="warn",
+                )
+                self.file_handle.seek(start)
+                return None
+
+            # CRC correct -> move file pointer back to start of payload so live loop can read it
+            self.file_handle.seek(start + HEADER_SIZE)
             return flags, msg_len, crc, timestamp
 
         except Exception as e:
-            self.plugin.log(f"Error reading header at offset {self.current_offset}: {e}", level="warn")
+            self.plugin.log(f"Exception while reading header at offset {self.file_handle.tell()}: {e}", level="error")
             return None
 
-    def read_message(self, msg_len: int) -> Optional[bytes]:
-        """Read message data of specified length from file."""
+    def _read_payload(self, msg_len: int) -> Optional[bytes]:
+        """Read message payload of specified length from file."""
         if not self.file_handle:
             self.plugin.log("File handle is None, cannot read message", level="error")
             return None
 
         try:
-            message_data = self.file_handle.read(msg_len)
-            if not message_data or len(message_data) < msg_len:
+            start: int = self.file_handle.tell()
+            message_payload: bytes = self.file_handle.read(msg_len)
+            if not message_payload or len(message_payload) < msg_len:
+                # incomplete message (likely EOF), restore file pointer and return None
+                self.file_handle.seek(start)
                 return None
 
-            self.current_offset += msg_len
-            return message_data
+            return message_payload
 
         except Exception as e:
-            self.plugin.log(f"Error reading message: {e}", level="error")
+            try:
+                self.file_handle.seek(start)
+            except Exception:
+                pass
+            self.plugin.log(f"Exception while reading message at offset {start}: {e}", level="error")
             return None
 
-    def process_message(self, msg_data: bytes) -> bool:
+    def _process_message(self, msg_data: bytes) -> bool:
         """Process and publish a gossip message. Return False if processing should stop."""
         if not msg_data or len(msg_data) < 2:
             return True
@@ -281,102 +316,217 @@ class GossipPublisher:
 
         # Handle special message: gossip_store_ended
         if msg_type == MSG_TYPE_GOSSIP_STORE_ENDED:
-            return self.handle_ended_message()
+            return self._handle_ended_message()
 
         return True
 
-    def handle_ended_message(self) -> bool:
+    def _handle_ended_message(self) -> bool:
         """Handle the gossip_store_ended message by reopening the file."""
         self.plugin.log("Detected gossip_store_ended, reopening file", level="warn")
         if self.file_handle:
             self.file_handle.close()
             self.file_handle = None
 
-        time.sleep(1)  # Wait a bit for the new file to be ready
-        return self.open_gossip_store()
+        time.sleep(POLL_INTERVAL)  # Wait a bit for the new file to be ready
+        return self._open_gossip_store()
 
-    def monitor_loop(self) -> None:
+    def _is_gossip_in_gossip_store(self) -> bool:
+        # Check if there are messages beyond the version byte
+        assert self.gossip_store_path is not None, "Attempted to check gossip store before path was initialized."
+
+        if self.gossip_store_path.stat().st_size <= 1:
+            self.plugin.log(
+                f"No gossip messages in gossip_store file at {self.gossip_store_path}",
+                level="warn",
+            )
+            return False
+        return True
+
+    def monitor_loop(self, start_at_byte: int) -> None:
         """Main monitoring loop that processes messages from the gossip store."""
+        success_counter: int = 0
 
         #
         # === INITIALIZATION PHASE === (run only once)
         #
 
         self.plugin.log("Starting initialization...")
+        header: Optional[Tuple[int, int, int, int]]
         while self.running and not self.initialized.is_set():
             if not self.gossip_store_path:
                 self._resolve_gossip_store_path()
                 if not self.gossip_store_path:
-                    time.sleep(DEFAULT_POLL_INTERVAL)
-                    continue
+                    self.plugin.log(
+                        "An error occured when resolving the gossip_store file path. Try restarting the plugin",
+                        level="error",
+                    )
+                    self.running = False
+                    return
 
-            if not self.file_handle and not self.open_gossip_store():
-                time.sleep(DEFAULT_POLL_INTERVAL)
-                continue
+            if not self.file_handle and not self._open_gossip_store():
+                self.plugin.log(
+                    "An error occured when opening the gossip_store. Try restarting the plugin", level="error"
+                )
+                self.running = False
+                return
 
-            # Initialization is complete here:
-            self.initialized.set()
-            self.plugin.log(
-                f"Initialization complete, start monitoring the {self.gossip_store_path} file", level="info"
-            )
+            # Keep retrying until gossip_store contains gossip messages
+            while not self._is_gossip_in_gossip_store():
+                self.plugin.log("Waiting for gossip to be added to gossip_store", level="info")
+                time.sleep(POLL_INTERVAL)
+
+            assert self.file_handle is not None, "File handle was not initialized before reading."
+
+            if 1 < start_at_byte <= self.file_size:
+                try:
+                    self.plugin.log(f"Trying to seek to {start_at_byte} ...", level="info")
+                    self.file_handle.seek(start_at_byte)
+
+                    while True:
+                        header = self._read_header()
+
+                        if header:
+                            # Found a valid header
+                            self.plugin.log(f"Valid header found at offset {self.file_handle.tell()}.", level="info")
+                            self.file_handle.seek(
+                                -HEADER_SIZE, 1
+                            )  # We need to go back the HEADER_SIZE bytes in our file
+
+                            # Initialization is complete here:
+                            self.initialized.set()
+                            self.plugin.log(
+                                f"Initialization complete, start monitoring the {self.gossip_store_path} file at {self.file_handle.tell()}",
+                                level="info",
+                            )
+
+                            break
+                        else:
+                            # No valid header, slide forward by 1 byte
+                            self.plugin.log(
+                                f"Could not parse header at offset {self.file_handle.tell()}, retrying ...",
+                                level="info",
+                            )
+
+                        self.file_handle.seek(1, 1)
+
+                        if self.file_handle.tell() >= self.file_size:
+                            self.file_handle.seek(1)
+                            self.plugin.log(
+                                f"Reached end of {self.gossip_store_path}, seeking to 1 (full file publish).",
+                                level="info",
+                            )
+                            break
+
+                except Exception as e:
+                    self.plugin.log(
+                        f"Error seeking to byte {start_at_byte}: {e}. Retrying initialization.", level="error"
+                    )
+
+                    if self.file_handle:
+                        self.file_handle.close()
+                        self.file_handle = None
+                        time.sleep(POLL_INTERVAL)
+                        continue
+
+            else:
+                self.plugin.log(
+                    f"Skipping seeking to `start-at-byte` due to value {start_at_byte} out of bounds [2, {self.file_size}]",
+                    "info",
+                )
+
+                # Initialization is complete here:
+                self.initialized.set()
+                self.plugin.log(
+                    f"Initialization complete, start monitoring the {self.gossip_store_path} file at {self.file_handle.tell()}",
+                    level="info",
+                )
 
         #
         # === LIVE MONITORING PHASE ===
         #
         while self.running:
             try:
-                header: Optional[Tuple[int, int, int, int]] = self.read_header()
+                assert self.file_handle is not None, "File handle was not initialized before reading."
+
+                header = self._read_header()
                 if not header:
-                    # Possibly EOF -> sleep a bit and try again
-                    time.sleep(DEFAULT_POLL_INTERVAL)
+                    # Possibly EOF or invalid header -> sleep a bit and try again
+                    time.sleep(POLL_INTERVAL)
                     continue
 
                 flags, msg_len, crc, timestamp = header
-                msg_data: Optional[bytes] = self.read_message(msg_len)
-                if not msg_data:
-                    time.sleep(DEFAULT_POLL_INTERVAL)
+
+                payload_data: Optional[bytes] = self._read_payload(msg_len)
+
+                if not payload_data:
+                    time.sleep(POLL_INTERVAL)
                     continue
 
-                if not self.process_message(msg_data):
+                if not self._process_message(payload_data):
+                    self.plugin.log("Could not process message", level="error")
                     break
+
+                success_counter += 1
+
+                if success_counter < 100 or success_counter % 1_000 == 0:
+                    self.plugin.log(f"Successfully published {success_counter} messages.", level="info")
+                    self.plugin.log(f"Current offset is {self.file_handle.tell()}", level="info")
 
             except Exception as e:
                 self.plugin.log(f"Error in monitor loop: {e}", level="error")
                 if self.file_handle:
                     self.file_handle.close()
                     self.file_handle = None
-                time.sleep(DEFAULT_POLL_INTERVAL)
+                    time.sleep(POLL_INTERVAL)
 
     # === Start of plugin ===
 
-    def start(self) -> None:
+    def start(self, start_at_byte: int) -> None:
         """Start the monitoring thread."""
         self.running = True
 
+        try:
+            self.plugin.log("Publisher bound. Waiting 1 second for subscribers to connect...", level="info")
+            time.sleep(1)
+
+            self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True, args=(start_at_byte,))
+            self.monitor_thread.start()
+            self.plugin.log("GossipPublisher monitoring thread started", level="info")
+
+        except Exception as e:
+            self.plugin.log(f"Failed to start monitoring thread: {e}", level="error")
+
         # Start monitor thread
-        self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
-        self.monitor_thread.start()
-        self.plugin.log("GossipPublisher monitoring thread started", level="info")
 
     # === Stop of plugin ===
 
     def stop(self) -> None:
         """Stop the monitoring thread and clean up resources."""
+        self.plugin.log("Initiating shutdown of gossip-publisher-zmq plugin", level="info")
+
+        # Signal thread to stop
         self.running = False
 
-        if self.monitor_thread and self.monitor_thread.is_alive():
+        # Only join if called from another thread
+        if self.monitor_thread and self.monitor_thread.is_alive() and threading.current_thread() != self.monitor_thread:
             self.monitor_thread.join(timeout=2.0)
             self.plugin.log("Monitor thread stopped", level="info")
 
         # Close file
         if self.file_handle:
-            self.file_handle.close()
+            try:
+                self.file_handle.close()
+            except Exception as e:
+                self.plugin.log(f"Error closing file handle: {e}", level="warn")
             self.file_handle = None
 
         # Close ZMQ
-        self.zmq_socket.close()
-        self.zmq_context.term()
-        self.plugin.log("ZMQ resources cleaned up", level="info")
+        try:
+            self.zmq_socket.close(linger=0)
+            self.zmq_context.term()
+            self.plugin.log("ZMQ resources cleaned up", level="info")
+        except Exception as e:
+            self.plugin.log(f"Error cleaning ZMQ resources: {e}", level="warn")
 
 
 def resolve_sender_node_id(plugin: Plugin) -> Optional[str]:
@@ -402,9 +552,10 @@ def resolve_sender_node_id(plugin: Plugin) -> Optional[str]:
 # Initialize plugin
 plugin = Plugin()
 
-plugin.add_option("zmq-port", "5675", "Port to bind ZMQ PUB socket")
+plugin.add_option("zmq-port", "5675", "Port to bind ZMQ PUB socket", "int")
 plugin.add_option("zmq-host", "127.0.0.1", "Host to bind ZMQ PUB socket")
 plugin.add_option("sender-node-id", "", "Optional override for sender_node_id")
+plugin.add_option("start-at-byte", 0, "Byte offset to start reading the gossip_store file from.", "int")
 
 
 @plugin.init()
@@ -416,13 +567,14 @@ def init(options: Dict[str, Any], configuration: Dict[str, Any], plugin: Plugin)
     zmq_port: int = int(plugin.get_option("zmq-port") or DEFAULT_ZMQ_PORT)
     zmq_host: str = plugin.get_option("zmq-host") or DEFAULT_ZMQ_HOST
     sender_node_id: str = plugin.get_option("sender-node-id") or str(resolve_sender_node_id(plugin))
+    start_byte: int = plugin.get_option("start-at-byte") or START_AT_BYTE or 1
 
     zmq_endpoint = f"tcp://{zmq_host}:{zmq_port}"
 
     # Create and start the gossip publisher
     plugin.gossip_monitor = GossipPublisher(plugin, zmq_endpoint, sender_node_id)
     plugin.gossip_monitor.setup_zmq()
-    plugin.gossip_monitor.start()
+    plugin.gossip_monitor.start(start_byte)
 
     plugin.log(f"Gossip ZMQ Publisher started, publishing to {zmq_endpoint}", level="info")
     plugin.log("Use `lightning-cli gpz-status` to get a status update of the plugin.", level="info")
@@ -444,8 +596,16 @@ def status() -> Dict[str, Any]:
         "gossip_store_path": (
             str(gossip_publisher.gossip_store_path) if gossip_publisher and gossip_publisher.gossip_store_path else None
         ),
-        "current_offset": gossip_publisher.current_offset,
-        "initialized": gossip_publisher.initialized.is_set(),
+        "offset_of_gossip_store": (
+            gossip_publisher.file_handle.tell()
+            if gossip_publisher.file_handle
+            else "Missing file_handle to gossip_store -> Does the gossip_store file exist?"
+        ),
+        "initialized": (
+            gossip_publisher.initialized.is_set()
+            if gossip_publisher.initialized
+            else "Initialization thread does not exist -> Try restarting the plugin."
+        ),
     }
 
 

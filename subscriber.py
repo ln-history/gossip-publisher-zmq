@@ -12,6 +12,8 @@ socket.connect("tcp://127.0.0.1:5675")
 # Subscribe to all topics
 socket.setsockopt_string(zmq.SUBSCRIBE, "")
 
+count = 0
+
 # Open a test file to write the received messages
 with open("output.txt", "w") as output_file:
     print("Subscriber started, waiting for messages...")
@@ -22,7 +24,10 @@ with open("output.txt", "w") as output_file:
             topic = socket.recv_string()
             message = socket.recv_json()
 
+            count += 1
+
             # Print the message
+            print(f"Message count: {count}")
             print(f"Topic: {topic}")
             print(f"Metadata: {message['metadata']}")
             print(f"Raw data: {message['raw_hex']}")
@@ -30,6 +35,7 @@ with open("output.txt", "w") as output_file:
             print("-" * 80)
 
             # Write to the file
+            output_file.write(f"Message count: {count}\n")
             output_file.write(f"Topic: {topic}\n")
             output_file.write(f"Metadata: {message['metadata']}")
             output_file.write(f"Raw data: {message['raw_hex']}")
