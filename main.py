@@ -387,10 +387,11 @@ class GossipPublisher:
 
                         if header:
                             # Found a valid header
-                            self.plugin.log(f"Valid header found at offset {self.file_handle.tell()}.", level="info")
                             self.file_handle.seek(
                                 -HEADER_SIZE, 1
-                            )  # We need to go back the HEADER_SIZE bytes in our file
+                            )  
+                            # We need to go back the HEADER_SIZE bytes in our file
+                            self.plugin.log(f"Valid header found at offset {self.file_handle.tell()}.", level="info")
 
                             # Initialization is complete here:
                             self.initialized.set()
