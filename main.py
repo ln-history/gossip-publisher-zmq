@@ -250,7 +250,7 @@ class GossipPublisher:
                 return None
 
             # CRC correct -> move file pointer back to start of payload so live loop can read it
-            self.file_handle.seek(start + HEADER_SIZE)
+            # self.file_handle.seek(start + HEADER_SIZE)
             return flags, msg_len, crc, timestamp
 
         except Exception as e:
