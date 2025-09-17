@@ -54,10 +54,10 @@ Create a .env file (feel free to copy the .example.env file) with your configura
 ZMQ_HOST=127.0.0.1
 ZMQ_PORT=5675
 
-DEFAULT_POLL_INTERVAL=1
+DEFAULT_POLL_INTERVAL=1                             # Seconds
 DEFAULT_SENDER_NODE_ID=my-gossip-publisher-zmq      # Set a name or id for your node that gets attached to every published message
 
-DEFAULT_LOG_DIR=logs
+START_AT_BYTE=<number-of-bytes-to-skip>             # In case your gossip_store file is very big it might make sense to start at a high value due to performance reasons, skipping older gossip messages  
 ```
 
 #### Start the plugin with Core Lightning
@@ -74,7 +74,7 @@ lightningd --plugin=/path/to/gossip-publisher-zmq/main.py
 
 In case you want to configure the env variables, you can also pass them as <key>=<value>, using this syntax:
 ```sh
-lightning-cli -k plugin subcommand=start plugin=/path/to/plugin/gossip-publisher-zmq/main.py zmq-port=5676
+lightning-cli -k plugin subcommand=start plugin=/path/to/plugin/gossip-publisher-zmq/main.py zmq-port=5675
 ```
 
 Check plugin status
@@ -135,18 +135,19 @@ while True:
     print(f"Received {topic}: {data}")
 ```
 
-## 💬 Message Types
-The plugin handles all types of Lightning Network gossip messages:
+# Message Types
+| Type Number | Name | Description |
+| :--- | :--- | :--- |
+| 256 | `channel_announcement` | Announces new channels |
+| 257 | `node_announcement` | Broadcasts node information and features |
+| 258 | `channel_update` | Updates channel routing policies |
+| 4101 | `channel_amount` | Channel capacity information (Core Lightning specific) |
+| 4102 | `private_update` | Updates for private channels (Core Lightning specific) |
+| 4103 | `delete_channel` | Channel deletion notifications (Core Lightning specific) |
+| 4104 | `private_channel` | Private channel information (Core Lightning specific) |
+| 4105 | `store_ended` | Gossip store end markers (Core Lightning specific) |
+| 4106 | `channel_dying` | Channels about to be removed (Core Lightning specific) |
 
-📢 channel_announcement - Announces new channels
-👤 node_announcement - Broadcasts node information and features
-🔄 channel_update - Updates channel routing policies
-💰 channel_amount - Channel capacity information (Core Lightning specific)
-🕵️ private_update - Updates for private channels (Core Lightning specific)
-🗑️ delete_channel - Channel deletion notifications (Core Lightning specific)
-🔒 private_channel - Private channel information (Core Lightning specific)
-🏁 store_ended - Gossip store end markers (Core Lightning specific)
-💀 channel_dying - Channels about to be removed (Core Lightning specific)
 
 
 ## 🧪 Development
@@ -172,7 +173,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
    - Open a Pull Request
 
 ## 📜 License
-This project is licensed under the Apache License 2.0 - see the [LICENSE file](./LICENSE) for details.
+This project is licensed under the MIT License - see the [LICENSE file](./LICENSE) for details.
 
 ## 🙏 Acknowledgements
 Core Lightning team for their amazing work
