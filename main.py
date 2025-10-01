@@ -21,9 +21,10 @@ import json
 import struct
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from threading import Thread
-from typing import Any, BinaryIO, Dict, Optional, Tuple, Union, cast
+from typing import Any, BinaryIO, Deque, Dict, List, Optional, Tuple, Union, cast
 
 import zmq
 from crc32c import crc32c
@@ -50,6 +51,7 @@ from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known
 from pyln.client import Plugin
 from zmq import SyncSocket
 
+from common import is_json_serializable
 from config import DEFAULT_SENDER_NODE_ID, DEFAULT_ZMQ_HOST, DEFAULT_ZMQ_PORT, POLL_INTERVAL, START_AT_BYTE
 
 # Constants
@@ -79,6 +81,9 @@ class GossipPublisher:
         self.monitor_thread: Optional[Thread] = None
         self.initialized = threading.Event()  # Event to signal when initialization is complete
 
+        # Performance data
+        self.last_100_messages: Deque[Dict[str, Any]] = deque(maxlen=100)
+
     def setup_zmq(self) -> None:
         """Bind the ZMQ socket to the specified endpoint."""
         try:
@@ -97,14 +102,14 @@ class GossipPublisher:
     def _publish_to_zmq(self, topic: str, payload: Union[ParsedGossipDict, ParsedCoreLightningGossipDict]) -> None:
         """Publish a message to the ZMQ socket."""
         try:
-            # First frame: topic
-            self.zmq_socket.send_string(topic, zmq.SNDMORE)
-
             # Check JSON serializability
-            if not self._is_json_serializable(payload):
+            if not is_json_serializable(payload):
                 self.plugin.log("Payload is not JSON serializable!", level="error")
                 self.plugin.log(f"Payload: {payload}", level="warn")
                 return
+
+            # First frame: topic
+            self.zmq_socket.send_string(topic, zmq.SNDMORE)
 
             # Second frame: JSON payload
             json_str = json.dumps(payload)
@@ -112,14 +117,6 @@ class GossipPublisher:
 
         except Exception as e:
             self.plugin.log(f"Error publishing message: {e}", level="error")
-
-    def _is_json_serializable(self, obj: Any) -> bool:
-        """Check if an object can be serialized to JSON."""
-        try:
-            json.dumps(obj)
-            return True
-        except (TypeError, OverflowError):
-            return False
 
     def _parse_gossip(
         self, msg_type: int, msg_name: str, raw_hex: str
@@ -151,7 +148,9 @@ class GossipPublisher:
 
         except Exception as e:
             self.plugin.log(f"Error parsing {msg_name} payload: {e}", level="error")
-            self.plugin.log(f"Message data in hex: {raw_hex[:1000]}...", level="error")
+            self.plugin.log(
+                f"Message payload in hex: {raw_hex[:1000]}... at offset {self.file_handle.tell()}", level="error"
+            )
             return None
 
     def _resolve_gossip_store_path(self) -> None:
@@ -243,14 +242,14 @@ class GossipPublisher:
             computed_crc = crc32c(payload, timestamp) & 0xFFFFFFFF
             if computed_crc != crc:
                 self.plugin.log(
-                    f"CRC32C mismatch at offset {self.file_handle.tell()}, started from {start}: expected {crc}, got {computed_crc}",
+                    f"CRC mismatch at offset {self.file_handle.tell()}, started from {start}: expected {crc}, got {computed_crc}",
                     level="warn",
                 )
                 self.file_handle.seek(start)
                 return None
 
             # CRC correct -> move file pointer back to start of payload so live loop can read it
-            # self.file_handle.seek(start + HEADER_SIZE)
+            self.file_handle.seek(start + HEADER_SIZE)
             return flags, msg_len, crc, timestamp
 
         except Exception as e:
@@ -282,12 +281,13 @@ class GossipPublisher:
             return None
 
     def _process_message(self, msg_data: bytes) -> bool:
-        """Process and publish a gossip message. Return False if processing should stop."""
-        if not msg_data or len(msg_data) < 2:
-            return True
+        """Process the payload of a gossip message and publish a plugin event. Return False if an error occurs, otherwise True."""
+
+        msg_len = len(msg_data)
+        if not msg_data or msg_len < 2:
+            return False
 
         # Adding the length of the raw gossip as varint decode to the raw_hex
-        msg_len = len(msg_data)
         msg_len_varint_encoded = varint_encode(msg_len)
 
         msg_type = get_message_type_by_bytes(msg_data)
@@ -303,6 +303,16 @@ class GossipPublisher:
         }
 
         parsed = self._parse_gossip(msg_type, msg_name, strip_known_message_type(msg_data).hex())
+
+        # Handle parsing error
+        if not parsed:
+            self.plugin.log(
+                f"An error occured when parsing a {GOSSIP_TYPE_NAMES.get(msg_type)} message with payload {raw_hex[:1000]} that has length of {len(raw_hex)} at offset {self.file_handle.tell()}."
+            )
+            self.file_handle.seek(-100, 1)
+            self.plugin.log(f"Sorrounding +- 100 bytes in `gossip_store`file {self.file_handle.read(300).hex()}")
+            # self.plugin.log(f"Skipping further handling of this message payload {raw_hex[:1000]}.")
+            return False
 
         if msg_type in LIGHTNING_TYPES or msg_type in CORE_LIGHTNING_TYPES:
             payload: Union[PluginEvent, PluginCoreLightningEvent] = {
@@ -342,14 +352,57 @@ class GossipPublisher:
             return False
         return True
 
+    def _move_file_handle_to_valid_position(self, start_at_byte: int) -> bool:
+        try:
+            self.plugin.log(f"Trying to seek to {start_at_byte} ...", level="info")
+            self.file_handle.seek(start_at_byte)
+
+            while True:
+                header = self._read_header()
+
+                if header:
+                    # Found a valid header
+                    self.file_handle.seek(-HEADER_SIZE, 1)
+                    # We need to go back the HEADER_SIZE bytes in our file
+                    self.plugin.log(f"Valid header found at offset {self.file_handle.tell()}.", level="info")
+
+                    return True
+
+                else:
+                    # No valid header, slide forward by 1 byte
+                    self.plugin.log(
+                        f"Could not parse header at offset {self.file_handle.tell()}, retrying ...",
+                        level="info",
+                    )
+
+                self.file_handle.seek(1, 1)
+
+                if self.file_handle.tell() >= self.file_size:
+                    self.file_handle.seek(1)
+                    self.plugin.log(
+                        f"Reached end of {self.gossip_store_path}, seeking to 1 (full file publish).",
+                        level="info",
+                    )
+                    return False
+
+        except Exception as e:
+            self.plugin.log(f"Error seeking to byte {start_at_byte}: {e}.", level="error")
+
+            if self.file_handle:
+                self.file_handle.close()
+                self.file_handle = None
+                time.sleep(POLL_INTERVAL)
+
+            return False
+
     def monitor_loop(self, start_at_byte: int) -> None:
         """Main monitoring loop that processes messages from the gossip store."""
         success_counter: int = 0
+        has_moved_to_valid_position: bool = False
 
         #
         # === INITIALIZATION PHASE === (run only once)
         #
-
         self.plugin.log("Starting initialization...")
         header: Optional[Tuple[int, int, int, int]]
         while self.running and not self.initialized.is_set():
@@ -378,56 +431,12 @@ class GossipPublisher:
             assert self.file_handle is not None, "File handle was not initialized before reading."
 
             if 1 < start_at_byte <= self.file_size:
-                try:
-                    self.plugin.log(f"Trying to seek to {start_at_byte} ...", level="info")
-                    self.file_handle.seek(start_at_byte)
-
-                    while True:
-                        header = self._read_header()
-
-                        if header:
-                            # Found a valid header
-                            self.file_handle.seek(
-                                -HEADER_SIZE, 1
-                            )  
-                            # We need to go back the HEADER_SIZE bytes in our file
-                            self.plugin.log(f"Valid header found at offset {self.file_handle.tell()}.", level="info")
-
-                            # Initialization is complete here:
-                            self.initialized.set()
-                            self.plugin.log(
-                                f"Initialization complete, start monitoring the {self.gossip_store_path} file at {self.file_handle.tell()}",
-                                level="info",
-                            )
-
-                            break
-                        else:
-                            # No valid header, slide forward by 1 byte
-                            self.plugin.log(
-                                f"Could not parse header at offset {self.file_handle.tell()}, retrying ...",
-                                level="info",
-                            )
-
-                        self.file_handle.seek(1, 1)
-
-                        if self.file_handle.tell() >= self.file_size:
-                            self.file_handle.seek(1)
-                            self.plugin.log(
-                                f"Reached end of {self.gossip_store_path}, seeking to 1 (full file publish).",
-                                level="info",
-                            )
-                            break
-
-                except Exception as e:
-                    self.plugin.log(
-                        f"Error seeking to byte {start_at_byte}: {e}. Retrying initialization.", level="error"
-                    )
-
-                    if self.file_handle:
-                        self.file_handle.close()
-                        self.file_handle = None
-                        time.sleep(POLL_INTERVAL)
-                        continue
+                has_moved_to_valid_position = self._move_file_handle_to_valid_position(start_at_byte)
+                if not has_moved_to_valid_position:
+                    self.plugin.log(f"Could not move to position {start_at_byte}.", level="error")
+                    self.plugin.log("Aborting plugin, please consider deleting `gossip_store` file.", level="error")
+                    self.running = False
+                    return
 
             else:
                 self.plugin.log(
@@ -464,10 +473,29 @@ class GossipPublisher:
                     continue
 
                 if not self._process_message(payload_data):
-                    self.plugin.log("Could not process message", level="error")
-                    break
-
-                success_counter += 1
+                    self.plugin.log(
+                        f"Could not process message with payload {payload_data[:1000].hex()}", level="error"
+                    )
+                    self.plugin.log(f"Trying to find a valid offset after {self.file_handle.tell()}.")
+                    has_moved_to_valid_position = self._move_file_handle_to_valid_position(self.file_handle.tell() + 1)
+                    if not has_moved_to_valid_position:
+                        self.plugin.log(f"Could not move to position {start_at_byte}.", level="error")
+                        self.plugin.log("Aborting plugin, please consider deleting `gossip_store` file.", level="error")
+                        self.running = False
+                        return
+                else:
+                    success_counter += 1
+                    msg_type = get_message_type_by_bytes(payload_data)
+                    msg_name = GOSSIP_TYPE_NAMES.get(msg_type, f"UNKNOWN_{msg_type}")
+                    self.last_100_messages.append(
+                        {
+                            "type": msg_type,
+                            "timestamp": time.time(),
+                            "payload": self._parse_gossip(
+                                msg_type, msg_name, strip_known_message_type(payload_data).hex()
+                            ),
+                        }
+                    )
 
                 if success_counter < 100 or success_counter % 1_000 == 0:
                     self.plugin.log(f"Successfully published {success_counter} messages.", level="info")
@@ -579,6 +607,7 @@ def init(options: Dict[str, Any], configuration: Dict[str, Any], plugin: Plugin)
 
     plugin.log(f"Gossip ZMQ Publisher started, publishing to {zmq_endpoint}", level="info")
     plugin.log("Use `lightning-cli gpz-status` to get a status update of the plugin.", level="info")
+    plugin.log("Use `lightning-cli last-msgs` to get a list of the last 100 parsed gossip messages", level="info")
     plugin.log(
         "Use `lightning-cli -k plugin subcommand=start plugin=<path-to-plugin> <option-name>=<value>` to configure the plugin.",
         level="info",
@@ -607,7 +636,15 @@ def status() -> Dict[str, Any]:
             if gossip_publisher.initialized
             else "Initialization thread does not exist -> Try restarting the plugin."
         ),
+        "last_10_processed_messages": list(gossip_publisher.last_100_messages)[:10],
     }
+
+
+@plugin.method("last-msgs")
+def get_last_messages() -> List[Dict[str, Any]]:
+    gossip_publisher: GossipPublisher = cast(GossipPublisher, getattr(plugin, "gossip_monitor", None))
+
+    return list(gossip_publisher.last_100_messages)
 
 
 if __name__ == "__main__":
