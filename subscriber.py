@@ -1,4 +1,5 @@
 import zmq
+from collections import defaultdict
 
 # ZeroMQ Context
 context = zmq.Context()
@@ -13,37 +14,32 @@ socket.connect("tcp://127.0.0.1:5675")
 socket.setsockopt_string(zmq.SUBSCRIBE, "")
 
 count = 0
+msg_counts = defaultdict(int)
 
-# Open a test file to write the received messages
-with open("output.txt", "w") as output_file:
-    print("Subscriber started, waiting for messages...")
+print("Subscriber started, waiting for messages...")
 
-    try:
-        while True:
-            # Receive topic and message
-            topic = socket.recv_string()
-            message = socket.recv_json()
+try:
+    while True:
+        # Receive multipart message (topic + payload)
+        msg = socket.recv_multipart()
+        print("Received:", msg)
 
-            count += 1
+        # msg_counts[topic] += 1
+        count += 1
 
-            # Print the message
-            print(f"Message count: {count}")
-            print(f"Topic: {topic}")
-            print(f"Metadata: {message['metadata']}")
-            print(f"Raw data: {message['raw_hex']}")
-            print(f"Parsed: {message['parsed']}")
-            print("-" * 80)
 
-            # Write to the file
-            output_file.write(f"Message count: {count}\n")
-            output_file.write(f"Topic: {topic}\n")
-            output_file.write(f"Metadata: {message['metadata']}")
-            output_file.write(f"Raw data: {message['raw_hex']}")
-            output_file.write(f"Parsed: {message['parsed']}")
-            output_file.write("-" * 80 + "\n")
+        if count % 1_000 == 0:
+            print(f"Consumed {count} messages so far...")
 
-    except KeyboardInterrupt:
-        print("Subscriber closing...")
-    finally:
-        socket.close()
-        context.term()
+except KeyboardInterrupt:
+    print("\nSubscriber closing...")
+
+finally:
+    socket.close()
+    context.term()
+
+# Print summary stats
+print("\n=== Gossip Stats ===")
+print(f"Total messages: {count}")
+for topic, cnt in msg_counts.items():
+    print(f"Topic '{topic}': {cnt} messages ({cnt/count:.2%})")
