@@ -24,11 +24,11 @@ from lnhistoryclient.constants import (
 )
 from lnhistoryclient.model.types import ParsedGossipDict, PluginEvent, PluginEventMetadata
 from lnhistoryclient.model.core_lightning_internal.types import ParsedCoreLightningGossipDict, PluginCoreLightningEvent
+from lnhistoryclient.model.core_lightning_internal.GossipStoreEnded import GossipStoreEndedDict
 from lnhistoryclient.parser import parser_factory
 from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known_message_type, varint_encode
 from pyln.client import Plugin
 
-from common import is_json_serializable
 from config import DEFAULT_SENDER_NODE_ID, DEFAULT_ZMQ_HOST, DEFAULT_ZMQ_PORT, POLL_INTERVAL, START_AT_BYTE
 
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
@@ -239,16 +239,51 @@ class GossipPublisher:
                 if success_counter > 0 and success_counter % 5000 == 0:
                     self.plugin.log(f"Processed {success_counter} messages. Current offset: {self.file_handle.tell()}")
 
+                # Handle Gossip Store Rotation
                 if msg_type == MSG_TYPE_GOSSIP_STORE_ENDED:
-                     self.plugin.log("Gossip store ended. Reopening...", level="warn")
-                     self.file_handle.close()
-                     time.sleep(POLL_INTERVAL)
-                     self._open_gossip_store()
-                     self.file_handle.seek(1)
+                    self.plugin.log("Gossip store ended. Handling rotation...", level="warn")
+                    
+                    stripped_hex = strip_known_message_type(payload_data).hex()
+                    parsed_result: GossipStoreEndedDict = self._parse_gossip(msg_type, msg_name, stripped_hex)
+                    
+                    # Extract the offset safely
+                    equivalent_offset = 1
+                    if parsed_result and "equivalent_offset" in parsed_result:
+                        equivalent_offset = parsed_result["equivalent_offset"]
+                        self.plugin.log(f"Next store file starts equivalent at offset: {equivalent_offset}")
+                    else:
+                        self.plugin.log("Could not parse equivalent_offset. Defaulting to 1 (Re-reading all).", level="warn")
+
+                    # Close the old file handle
+                    self.file_handle.close()
+                    self.file_handle = None
+                    
+                    # Retry loop to open the new file (Wait for Core-Lightning to perform the swap)
+                    max_retries = 10
+                    for i in range(max_retries):
+                        time.sleep(10*POLL_INTERVAL) 
+                        if self._open_gossip_store():
+                            break
+                        self.plugin.log(f"Waiting for new gossip_store... ({i+1}/{max_retries})")
+                    
+                    if not self.file_handle:
+                        self.plugin.log("Critical: Could not open new gossip_store after rotation.", level="error")
+                        self.running = False
+                        return
+
+                    # Seek to the calculated offset
+                    try:
+                        seek_target = max(1, equivalent_offset)
+                        self.file_handle.seek(seek_target)
+                        self.plugin.log(f"Resumed reading new store at offset {seek_target}")
+                    except Exception as e:
+                        self.plugin.log(f"Seek failed: {e}. Resetting to start.", level="error")
+                        self.file_handle.seek(1)
 
             except Exception as e:
-                self.plugin.log(f"Error in monitor loop: {e}", level="error")
-                time.sleep(1)
+                self.plugin.log(f"CRITICAL PLUGIN ERROR: {e}", level="error")
+                self.plugin.log(f"Restarting monitor loop in {POLL_INTERVAL} seconds...", level="error")
+                time.sleep(POLL_INTERVAL)
 
     def start(self, start_at_byte: int) -> None:
         """Start the monitoring thread."""
@@ -346,23 +381,28 @@ def init(options: dict[str, Any], configuration: dict[str, Any], plugin: Plugin)
 @plugin.method("gpz-status")
 def status() -> dict[str, Any]:
     """Return status information about the gossip ZMQ publisher."""
-    gm = getattr(plugin, "gossip_monitor", None)
+    gossip_monitor = getattr(plugin, "gossip_monitor", None)
 
     return {
-        "running": gm.running if gm else False,
-        "zmq_endpoint": gm.zmq_endpoint if gm else None,
-        "sender_node_id": gm.sender_node_id if gm else None,
-        "gossip_store_path": str(gm.gossip_store_path) if gm and gm.gossip_store_path else None,
-        "offset_of_gossip_store": str(gm.file_handle.tell()) if gm and gm.file_handle else 0,
-        "last_10_processed_messages": list(gm.last_100_messages)[:10] if gm else [],
+        "running": gossip_monitor.running if gossip_monitor else False,
+        "zmq_endpoint": gossip_monitor.zmq_endpoint if gossip_monitor else None,
+        "sender_node_id": gossip_monitor.sender_node_id if gossip_monitor else None,
+        "gossip_store_path": str(gossip_monitor.gossip_store_path) if gossip_monitor and gossip_monitor.gossip_store_path else None,
+        "offset_of_gossip_store": str(gossip_monitor.file_handle.tell()) if gossip_monitor and gossip_monitor.file_handle else 0,
+        "last_10_processed_messages": list(gossip_monitor.last_100_messages)[:10] if gossip_monitor else [],
     }
 
+@plugin.method("gpz-is-running")
+def is_running() -> bool:
+    """Returns true if the gossip monitor is active, false otherwise."""
+    gossip_monitor = getattr(plugin, "gossip_monitor", None)
+    return gossip_monitor.running if gossip_monitor else False
 
 @plugin.method("gpz-last-msgs")
 def get_last_messages() -> list[dict[str, Any]]:
     """Return the last 100 processed messages."""
-    gm = getattr(plugin, "gossip_monitor", None)
-    return list(gm.last_100_messages) if gm else []
+    gossip_monitor = getattr(plugin, "gossip_monitor", None)
+    return list(gossip_monitor.last_100_messages) if gossip_monitor else []
 
 
 if __name__ == "__main__":
