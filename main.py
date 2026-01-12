@@ -1,4 +1,4 @@
-#!/Users/fabiankraus/Programming/lightning/plugins/gossip-publisher-zmq/.venv/bin/python
+#!/usr/bin/env python3
 
 """
 gossip-publisher-zmq is a Core Lightning Plugin to publish collected gossip messages via ZeroMQ
@@ -20,12 +20,13 @@ import zmq
 from crc32c import crc32c
 from lnhistoryclient.constants import (
     CORE_LIGHTNING_TYPES, GOSSIP_TYPE_NAMES, HEADER_FORMAT, 
-    LIGHTNING_TYPES, MSG_TYPE_GOSSIP_STORE_ENDED
+    LIGHTNING_TYPES, MSG_TYPE_GOSSIP_STORE_ENDED, MSG_TYPE_DELETE_CHANNEL
 )
 from lnhistoryclient.model.types import ParsedGossipDict, PluginEvent, PluginEventMetadata
 from lnhistoryclient.model.core_lightning_internal.types import ParsedCoreLightningGossipDict, PluginCoreLightningEvent
 from lnhistoryclient.model.core_lightning_internal.GossipStoreEnded import GossipStoreEndedDict
 from lnhistoryclient.parser import parser_factory
+from lnhistoryclient.parser.core_lightning_internal.parser import parse_delete_channel 
 from lnhistoryclient.parser.common import get_message_type_by_bytes, strip_known_message_type, varint_encode
 from pyln.client import Plugin
 
@@ -79,6 +80,13 @@ class GossipPublisher:
     def _parse_gossip(self, msg_type: int, msg_name: str, raw_hex: str) -> Optional[Union[ParsedGossipDict, ParsedCoreLightningGossipDict]]:
         """Parse a message using lnhistoryclient parser."""
         try:
+            if msg_type == MSG_TYPE_DELETE_CHANNEL:
+                payload_bytes = bytes.fromhex(raw_hex)
+                
+                parsed_obj = parse_delete_channel(payload_bytes)
+                
+                return parsed_obj.to_dict()
+
             parser_fn = parser_factory.get_parser_by_message_type(msg_type)
             if not parser_fn:
                 self.plugin.log(f"No parser function found for msg_type: {msg_type}", level="debug")
@@ -201,10 +209,25 @@ class GossipPublisher:
                     continue
 
                 flags, msg_len, crc, timestamp = header
+
+                # 0x8000 = GOSSIP_STORE_DELETED_BIT
+                # If deleted, we are already at the end of the message (because _read_header read it).
+                # We simply skip processing.
+                if flags & 0x8000:
+                    continue
                 
                 # Rewind to read payload again (safest approach)
-                self.file_handle.seek(-msg_len, 1) 
+                # Since _read_header consumed the payload, we go back to read it for parsing.
+                self.file_handle.seek(-msg_len, 1)
+
                 payload_data = self.file_handle.read(msg_len)
+                
+                if len(payload_data) != msg_len:
+                    self.plugin.log(f"Sync lost. Expected {msg_len} bytes, got {len(payload_data)}", level="error")
+                    
+                    # Stop completely (let Watchdog restart us)
+                    self.running = False
+                    return
 
                 msg_type = get_message_type_by_bytes(payload_data)
                 
