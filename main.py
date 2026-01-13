@@ -202,6 +202,8 @@ class GossipPublisher:
         # === LIVE MONITORING PHASE ===
         while self.running:
             try:
+                time.sleep(0.01)
+
                 header = self._read_header()
                 
                 if not header:
